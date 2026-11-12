@@ -9,6 +9,24 @@ import { registerSocialRoutes } from './social-routes.js';
 const app=express(),server=createServer(app),wss=new WebSocketServer({server,path:'/',maxPayload:16*1024,perMessageDeflate:false});
 app.disable('x-powered-by');
 app.use(express.json({limit:'200kb'}));
+app.set('trust proxy',1);
+const rateBuckets=new Map();
+function rateLimit({windowMs=60000,max=40}={}) {
+  return (req,res,next)=>{
+    const now=Date.now(),key=(req.ip||req.socket.remoteAddress||'unknown')+':'+req.path;
+    let bucket=rateBuckets.get(key);
+    if(!bucket||now-bucket.start>=windowMs){bucket={start:now,count:0};rateBuckets.set(key,bucket)}
+    bucket.count++;
+    res.setHeader('RateLimit-Limit',String(max));
+    res.setHeader('RateLimit-Remaining',String(Math.max(0,max-bucket.count)));
+    if(bucket.count>max)return res.status(429).json({error:'Trop de requêtes. Réessaie dans un instant.'});
+    if(rateBuckets.size>4000){for(const [k,v] of rateBuckets)if(now-v.start>=windowMs)rateBuckets.delete(k)}
+    next();
+  };
+}
+app.use(['/score','/reg','/ref','/claim'],rateLimit({windowMs:60000,max:20}));
+app.use('/api/social',rateLimit({windowMs:60000,max:60}));
+
 app.use((req,res,next)=>{res.setHeader('Access-Control-Allow-Origin','*');res.setHeader('Access-Control-Allow-Headers','Content-Type, Authorization');res.setHeader('Access-Control-Allow-Methods','GET, PUT, POST, OPTIONS');if(req.method==='OPTIONS')return res.sendStatus(204);next()});
 app.use(express.static('.'));
 const TABLE='dust_siege_players';
