@@ -3,7 +3,7 @@ import express from 'express';
 import { createServer } from 'node:http';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
-import { supabase } from './supabase.js';
+import { supabase, authSupabase } from './supabase.js';
 import { registerSocialRoutes } from './social-routes.js';
 
 const app=express(),server=createServer(app),wss=new WebSocketServer({server,path:'/',maxPayload:16*1024,perMessageDeflate:false});
@@ -51,7 +51,7 @@ app.post('/api/marketing/login',rateLimit({windowMs:60000,max:5}),async(req,res)
     const email=String(req.body?.email||'').trim().toLowerCase();
     const password=String(req.body?.password||'');
     if(!email||!password)return res.status(400).json({error:'E-mail et mot de passe requis.'});
-    const {data,error}=await supabase.auth.signInWithPassword({email,password});
+    const {data,error}=await authSupabase.auth.signInWithPassword({email,password});
     if(error||!data?.user||!data?.session)return res.status(401).json({error:'Identifiants incorrects.'});
     const user=data.user;
     if(!user.email_confirmed_at)return res.status(403).json({error:'Confirme d’abord ton adresse e-mail.'});
