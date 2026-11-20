@@ -44,6 +44,50 @@ async function authenticatedUser(req,res){const a=req.headers.authorization||'';
 registerSocialRoutes(app, supabase, authenticatedUser);
 
 app.get('/api/profil',async(req,res)=>{try{const u=await authenticatedUser(req,res);if(!u)return;const verified=!!u.email_confirmed_at;const developer=verified&&DEVELOPER_EMAILS.has(String(u.email||'').toLowerCase());res.json({message:'Accès autorisé !',userId:u.id,email:u.email,developer,role:developer?'developer':'player'})}catch(e){jsonError(res,e,'Erreur interne du serveur.')}});
+
+app.post('/api/marketing/login',rateLimit({windowMs:60000,max:5}),async(req,res)=>{
+  try{
+    res.setHeader('Cache-Control','no-store');
+    const email=String(req.body?.email||'').trim().toLowerCase();
+    const password=String(req.body?.password||'');
+    if(!email||!password)return res.status(400).json({error:'E-mail et mot de passe requis.'});
+    const {data,error}=await supabase.auth.signInWithPassword({email,password});
+    if(error||!data?.user||!data?.session)return res.status(401).json({error:'Identifiants incorrects.'});
+    const user=data.user;
+    if(!user.email_confirmed_at)return res.status(403).json({error:'Confirme d’abord ton adresse e-mail.'});
+    if(!DEVELOPER_EMAILS.has(String(user.email||'').toLowerCase()))return res.status(403).json({error:'Ce compte n’a pas le rôle développeur Dust Siege.'});
+    res.json({access_token:data.session.access_token,refresh_token:data.session.refresh_token,expires_at:data.session.expires_at||null,user:{email:user.email,role:'developer'}});
+  }catch(e){jsonError(res,e,'Connexion au Centre Marketing impossible.')}
+});
+app.get('/api/marketing/overview',async(req,res)=>{
+  try{
+    res.setHeader('Cache-Control','no-store');
+    const u=await authenticatedUser(req,res);if(!u)return;
+    if(!u.email_confirmed_at||!DEVELOPER_EMAILS.has(String(u.email||'').toLowerCase()))return res.status(403).json({error:'Accès développeur requis.'});
+    const [playersResult,topResult]=await Promise.all([
+      supabase.from(TABLE).select('player_id,name,score,wave,games,kills,updated_at',{count:'exact'}).order('updated_at',{ascending:false}).limit(1000),
+      supabase.from(TABLE).select('name,score,wave').order('score',{ascending:false}).limit(10)
+    ]);
+    if(playersResult.error)throw playersResult.error;
+    if(topResult.error)throw topResult.error;
+    const rows=playersResult.data||[],top=topResult.data||[];
+    const cutoff=Date.now()-7*24*60*60*1000;
+    const active7d=rows.filter(p=>p.updated_at&&Date.parse(p.updated_at)>=cutoff).length;
+    const games=rows.reduce((n,p)=>n+Number(p.games||0),0);
+    const kills=rows.reduce((n,p)=>n+Number(p.kills||0),0);
+    res.json({
+      generatedAt:new Date().toISOString(),
+      totalPlayers:Number(playersResult.count??rows.length),
+      sampledPlayers:rows.length,
+      activePlayers7d:active7d,
+      gamesInSample:games,
+      killsInSample:kills,
+      topPlayers:top.map(p=>({name:safeName(p.name),score:num(p.score),wave:num(p.wave)})),
+      recentPlayers:rows.slice(0,10).map(p=>({name:safeName(p.name),score:num(p.score),wave:num(p.wave),updatedAt:p.updated_at||null}))
+    });
+  }catch(e){jsonError(res,e,'Impossible de charger les données du Centre Marketing.')}
+});
+
 app.get('/api/sauvegarde',async(req,res)=>{try{const u=await authenticatedUser(req,res);if(!u)return;const {data,error}=await supabase.from('game_saves').select('data, updated_at').eq('user_id',u.id).maybeSingle();if(error)throw error;res.json({data:data?.data||{},updated_at:data?.updated_at||null})}catch(e){jsonError(res,e,'Impossible de charger la sauvegarde.')}});
 app.put('/api/sauvegarde',async(req,res)=>{try{const u=await authenticatedUser(req,res);if(!u)return;const d=req.body?.data;if(!d||typeof d!=='object'||Array.isArray(d))return res.status(400).json({error:'Données de sauvegarde invalides.'});const {error}=await supabase.from('game_saves').upsert({user_id:u.id,data:d,updated_at:new Date().toISOString()},{onConflict:'user_id'});if(error)throw error;res.json({ok:true})}catch(e){jsonError(res,e,'Impossible d’enregistrer la sauvegarde.')}});
 app.post('/score',async(req,res)=>{try{const id=safeId(req.body?.id);if(!id)return res.status(400).json({error:'Identifiant joueur manquant.'});const old=await getPlayer(id),score=Math.floor(num(req.body?.score)),wave=Math.floor(num(req.body?.wave,0,10000));const p=await putPlayer(id,{name:safeName(req.body?.name),score:Math.max(old?.score||0,score),wave:Math.max(old?.wave||0,wave),games:(old?.games||0)+1});res.json({ok:true,score:p.score,wave:p.wave})}catch(e){jsonError(res,e,'Impossible d’enregistrer le score. Vérifie la table Dust Siege dans Supabase.')}});
