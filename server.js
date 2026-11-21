@@ -31,7 +31,146 @@ app.use((req,res,next)=>{res.setHeader('Access-Control-Allow-Origin','*');res.se
 app.use(express.static('.'));
 const TABLE='dust_siege_players';
 const safeId=v=>String(v||'').trim().slice(0,80);
-const safeName=v=>String(v||'Joueur').replace(/\s+/g, '').replace(/[^A-Z0-9-]/g, '').slice(0, 40);
+const safeName=v=>String(v||'Joueur').replace(/[<>\u0000-\u001f]/g,'').trim().slice(0,24)||'Joueur';
+const num=(v,min=0,max=1e9)=>Math.max(min,Math.min(max,Number.isFinite(+v)?+v:0));
+const jsonError=(res,e,msg)=>{console.error(msg,e?.message||e);return res.status(500).json({error:msg})};
+// Developer access is granted only to verified accounts listed in this server-side allowlist.
+const DEVELOPER_EMAILS=new Set(String(process.env.DS_DEVELOPER_EMAILS||'').split(',').map(v=>v.trim().toLowerCase()).filter(Boolean));
+async function getPlayer(id){const {data,error}=await supabase.from(TABLE).select('*').eq('player_id',safeId(id)).maybeSingle();if(error)throw error;return data}
+async function putPlayer(id,patch){const player_id=safeId(id);if(!player_id)throw new Error('Identifiant joueur manquant');const c=await getPlayer(player_id);const row={player_id,name:c?.name||'Joueur',score:c?.score||0,wave:c?.wave||0,games:c?.games||0,kills:c?.kills||0,heads:c?.heads||0,hits:c?.hits||0,shots:c?.shots||0,dmg:c?.dmg||0,fav:c?.fav||'—',referral_code:c?.referral_code||null,pending_bonus:c?.pending_bonus||0,referred_by:c?.referred_by||null,...patch,updated_at:new Date().toISOString()};const {data,error}=await supabase.from(TABLE).upsert(row,{onConflict:'player_id'}).select('*').single();if(error)throw error;return data}
+async function authenticatedUser(req,res){const a=req.headers.authorization||'';if(!a.startsWith('Bearer ')){res.status(401).json({error:'Aucun token fourni.'});return null}const {data,error}=await supabase.auth.getUser(a.slice(7));if(error||!data?.user){res.status(401).json({error:'Token invalide ou expiré.'});return null}return data.user}
+
+// Activation des routes Amis & équipes
+registerSocialRoutes(app, supabase, authenticatedUser);
+
+app.get('/api/profil',async(req,res)=>{try{const u=await authenticatedUser(req,res);if(!u)return;const verified=!!u.email_confirmed_at;const developer=verified&&DEVELOPER_EMAILS.has(String(u.email||'').toLowerCase());res.json({message:'Accès autorisé !',userId:u.id,email:u.email,developer,role:developer?'developer':'player'})}catch(e){jsonError(res,e,'Erreur interne du serveur.')}});
+
+app.post('/api/marketing/login',rateLimit({windowMs:60000,max:5}),async(req,res)=>{
+  try{
+    res.setHeader('Cache-Control','no-store');
+    const email=String(req.body?.email||'').trim().toLowerCase();
+    const password=String(req.body?.password||'');
+    if(!email||!password)return res.status(400).json({error:'E-mail et mot de passe requis.'});
+    const {data,error}=await authSupabase.auth.signInWithPassword({email,password});
+    if(error||!data?.user||!data?.session)return res.status(401).json({error:'Identifiants incorrects.'});
+    const user=data.user;
+    if(!user.email_confirmed_at)return res.status(403).json({error:'Confirme d’abord ton adresse e-mail.'});
+    if(!DEVELOPER_EMAILS.has(String(user.email||'').toLowerCase()))return res.status(403).json({error:'Ce compte n’a pas le rôle développeur Dust Siege.'});
+    res.json({access_token:data.session.access_token,refresh_token:data.session.refresh_token,expires_at:data.session.expires_at||null,user:{email:user.email,role:'developer'}});
+  }catch(e){jsonError(res,e,'Connexion au Centre Marketing impossible.')}
+});
+app.get('/api/marketing/overview',async(req,res)=>{
+  try{
+    res.setHeader('Cache-Control','no-store');
+    const u=await authenticatedUser(req,res);if(!u)return;
+    if(!u.email_confirmed_at||!DEVELOPER_EMAILS.has(String(u.email||'').toLowerCase()))return res.status(403).json({error:'Accès développeur requis.'});
+    const [playersResult,topResult]=await Promise.all([
+      supabase.from(TABLE).select('player_id,name,score,wave,games,kills,updated_at',{count:'exact'}).order('updated_at',{ascending:false}).limit(1000),
+      supabase.from(TABLE).select('name,score,wave').order('score',{ascending:false}).limit(10)
+    ]);
+    if(playersResult.error)throw playersResult.error;
+    if(topResult.error)throw topResult.error;
+    const rows=playersResult.data||[],top=topResult.data||[];
+    const cutoff=Date.now()-7*24*60*60*1000;
+    const active7d=rows.filter(p=>p.updated_at&&Date.parse(p.updated_at)>=cutoff).length;
+    const games=rows.reduce((n,p)=>n+Number(p.games||0),0);
+    const kills=rows.reduce((n,p)=>n+Number(p.kills||0),0);
+    res.json({
+      generatedAt:new Date().toISOString(),
+      totalPlayers:Number(playersResult.count??rows.length),
+      sampledPlayers:rows.length,
+      activePlayers7d:active7d,
+      gamesInSample:games,
+      killsInSample:kills,
+      topPlayers:top.map(p=>({name:safeName(p.name),score:num(p.score),wave:num(p.wave)})),
+      recentPlayers:rows.slice(0,10).map(p=>({name:safeName(p.name),score:num(p.score),wave:num(p.wave),updatedAt:p.updated_at||null}))
+    });
+  }catch(e){jsonError(res,e,'Impossible de charger les données du Centre Marketing.')}
+});
+
+
+// Console d'administration Dust Siege : lecture seule, réservée aux développeurs autorisés.
+async function requireDeveloper(req,res){
+  const user=await authenticatedUser(req,res);
+  if(!user)return null;
+  if(!user.email_confirmed_at||!DEVELOPER_EMAILS.has(String(user.email||'').toLowerCase())){
+    res.status(403).json({error:'Accès développeur requis.'});
+    return null;
+  }
+  return user;
+}
+
+app.get('/api/admin/overview',async(req,res)=>{
+  try{
+    res.setHeader('Cache-Control','no-store');
+    const user=await requireDeveloper(req,res);if(!user)return;
+    const [countResult,playersResult,topResult]=await Promise.all([
+      supabase.from(TABLE).select('player_id',{count:'exact',head:true}),
+      supabase.from(TABLE).select('player_id,name,score,wave,games,kills,updated_at').order('updated_at',{ascending:false}).limit(1000),
+      supabase.from(TABLE).select('name,score,wave').order('score',{ascending:false}).limit(8)
+    ]);
+    if(countResult.error)throw countResult.error;
+    if(playersResult.error)throw playersResult.error;
+    if(topResult.error)throw topResult.error;
+    const rows=playersResult.data||[];
+    const cutoff=Date.now()-7*24*60*60*1000;
+    const onlineRooms=Array.from(rooms.values());
+    const onlinePlayers=onlineRooms.reduce((n,r)=>n+r.players.size,0);
+    res.json({
+      generatedAt:new Date().toISOString(),
+      totalPlayers:Number(countResult.count??0),
+      sampledPlayers:rows.length,
+      activePlayers7d:rows.filter(p=>p.updated_at&&Date.parse(p.updated_at)>=cutoff).length,
+      gamesInSample:rows.reduce((n,p)=>n+Number(p.games||0),0),
+      killsInSample:rows.reduce((n,p)=>n+Number(p.kills||0),0),
+      onlinePlayers,
+      activeRooms:onlineRooms.length,
+      topPlayers:(topResult.data||[]).map(p=>({name:safeName(p.name),score:num(p.score),wave:num(p.wave)})),
+      recentPlayers:rows.slice(0,8).map(p=>({name:safeName(p.name),score:num(p.score),wave:num(p.wave),updatedAt:p.updated_at||null}))
+    });
+  }catch(e){jsonError(res,e,'Impossible de charger le tableau de bord administrateur.')}
+});
+
+app.get('/api/admin/players',async(req,res)=>{
+  try{
+    res.setHeader('Cache-Control','no-store');
+    const user=await requireDeveloper(req,res);if(!user)return;
+    const q=String(req.query.q||'').replace(/[^a-zA-Z0-9 _.-]/g,'').trim().slice(0,50);
+    const limit=Math.floor(num(req.query.limit??25,1,50));
+    const offset=Math.floor(num(req.query.offset??0,0,100000));
+    let query=supabase.from(TABLE)
+      .select('player_id,name,score,wave,games,kills,heads,hits,shots,dmg,updated_at',{count:'exact'})
+      .order('updated_at',{ascending:false})
+      .range(offset,offset+limit-1);
+    if(q)query=query.or(`name.ilike.%${q}%,player_id.ilike.%${q}%`);
+    const {data,error,count}=await query;
+    if(error)throw error;
+    res.json({items:(data||[]).map(p=>({
+      playerId:safeId(p.player_id),name:safeName(p.name),score:num(p.score),wave:num(p.wave),
+      games:num(p.games),kills:num(p.kills),heads:num(p.heads),hits:num(p.hits),shots:num(p.shots),
+      damage:num(p.dmg),updatedAt:p.updated_at||null
+    })),total:Number(count??0),limit,offset});
+  }catch(e){jsonError(res,e,'Impossible de charger la liste des joueurs.')}
+});
+
+app.get('/api/admin/live',async(req,res)=>{
+  try{
+    res.setHeader('Cache-Control','no-store');
+    const user=await requireDeveloper(req,res);if(!user)return;
+    const active=Array.from(rooms.values()).map(r=>({
+      room:String(r.name||'').slice(0,60),
+      mode:r.arena?'Arène':'Coopération',
+      players:r.players.size,
+      wave:r.arena?num(r.wave):null
+    }));
+    res.json({ok:true,websocket:true,activeRooms:active.length,onlinePlayers:active.reduce((n,r)=>n+r.players,0),rooms:active});
+  }catch(e){jsonError(res,e,'Impossible de lire l’état des serveurs.')}
+});
+
+
+// Codes de récompense privés : seuls les développeurs autorisés peuvent créer et utiliser leurs propres codes.
+function normalizeAdminRewardCode(value) {
+  return String(value || '').toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 40);
 }
 
 app.get('/api/admin/codes', async (req,res) => {
