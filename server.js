@@ -297,6 +297,36 @@ app.get('/api/admin/godmode',async(req,res)=>{
   }catch(e){jsonError(res,e,'Impossible de charger le mode Dieu.')}
 });
 
+
+/* Vérification des intégrations : aucun secret ni valeur d'environnement n'est renvoyé au navigateur. */
+app.get('/api/admin/integrations',async(req,res)=>{
+  try{
+    res.setHeader('Cache-Control','no-store');
+    const user=await requireDeveloper(req,res);if(!user)return;
+    const [players,saves,frontend,gameRepo,serverRepo]=await Promise.allSettled([
+      supabase.from(TABLE).select('player_id',{count:'exact',head:true}),
+      supabase.from('game_saves').select('user_id',{count:'exact',head:true}),
+      fetch('https://dust-siege-game-v9.onrender.com/',{signal:AbortSignal.timeout(7000)}),
+      fetch('https://api.github.com/repos/Boubaa86/Dust-siege-FPS/commits/main',{headers:{'Accept':'application/vnd.github+json','User-Agent':'DustSiegeAdmin'},signal:AbortSignal.timeout(7000)}),
+      fetch('https://api.github.com/repos/Boubaa86/dust-siege-server/commits/main',{headers:{'Accept':'application/vnd.github+json','User-Agent':'DustSiegeAdmin'},signal:AbortSignal.timeout(7000)})
+    ]);
+    const status=(r)=>r.status==='fulfilled';
+    const parseCommit=async r=>{
+      if(!status(r)||!r.value.ok)return {connected:false};
+      const j=await r.value.json();
+      return {connected:true,sha:String(j.sha||'').slice(0,12),message:String(j.commit?.message||'').slice(0,100),date:j.commit?.committer?.date||null,url:j.html_url||null};
+    };
+    const [gameCommit,serverCommit]=await Promise.all([parseCommit(gameRepo),parseCommit(serverRepo)]);
+    res.json({
+      checkedAt:new Date().toISOString(),
+      api:{connected:true,url:'https://dust-siege-server-1.onrender.com/health'},
+      supabase:{connected:status(players)&&!players.value.error&&status(saves)&&!saves.value.error,players:status(players)&&!players.value.error?Number(players.value.count||0):null,saves:status(saves)&&!saves.value.error?Number(saves.value.count||0):null},
+      render:{backend:'connected',frontend:status(frontend)&&frontend.value.ok,frontendStatus:status(frontend)?frontend.value.status:null,frontendUrl:'https://dust-siege-game-v9.onrender.com',backendUrl:'https://dust-siege-server-1.onrender.com'},
+      github:{game:gameCommit,server:serverCommit}
+    });
+  }catch(e){jsonError(res,e,'Impossible de vérifier les intégrations.')}
+});
+
 app.get('/api/sauvegarde',async(req,res)=>{try{const u=await authenticatedUser(req,res);if(!u)return;const {data,error}=await supabase.from('game_saves').select('data, updated_at').eq('user_id',u.id).maybeSingle();if(error)throw error;res.json({data:data?.data||{},updated_at:data?.updated_at||null})}catch(e){jsonError(res,e,'Impossible de charger la sauvegarde.')}});
 app.put('/api/sauvegarde',async(req,res)=>{try{const u=await authenticatedUser(req,res);if(!u)return;const d=req.body?.data;if(!d||typeof d!=='object'||Array.isArray(d))return res.status(400).json({error:'Données de sauvegarde invalides.'});const {error}=await supabase.from('game_saves').upsert({user_id:u.id,data:d,updated_at:new Date().toISOString()},{onConflict:'user_id'});if(error)throw error;res.json({ok:true})}catch(e){jsonError(res,e,'Impossible d’enregistrer la sauvegarde.')}});
 app.post('/score',async(req,res)=>{try{const id=safeId(req.body?.id);if(!id)return res.status(400).json({error:'Identifiant joueur manquant.'});const old=await getPlayer(id),score=Math.floor(num(req.body?.score)),wave=Math.floor(num(req.body?.wave,0,10000));const p=await putPlayer(id,{name:safeName(req.body?.name),score:Math.max(old?.score||0,score),wave:Math.max(old?.wave||0,wave),games:(old?.games||0)+1});res.json({ok:true,score:p.score,wave:p.wave})}catch(e){jsonError(res,e,'Impossible d’enregistrer le score. Vérifie la table Dust Siege dans Supabase.')}});
