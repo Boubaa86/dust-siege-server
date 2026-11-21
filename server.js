@@ -5,6 +5,7 @@ import { createHash, randomUUID, randomBytes } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { supabase, authSupabase } from './supabase.js';
 import { registerSocialRoutes } from './social-routes.js';
+import { RtcTokenBuilder, RtcRole } from 'agora-token';
 
 const app=express(),server=createServer(app),wss=new WebSocketServer({server,path:'/',maxPayload:16*1024,perMessageDeflate:false});
 app.disable('x-powered-by');
@@ -39,6 +40,41 @@ const DEVELOPER_EMAILS=new Set(String(process.env.DS_DEVELOPER_EMAILS||'').split
 async function getPlayer(id){const {data,error}=await supabase.from(TABLE).select('*').eq('player_id',safeId(id)).maybeSingle();if(error)throw error;return data}
 async function putPlayer(id,patch){const player_id=safeId(id);if(!player_id)throw new Error('Identifiant joueur manquant');const c=await getPlayer(player_id);const row={player_id,name:c?.name||'Joueur',score:c?.score||0,wave:c?.wave||0,games:c?.games||0,kills:c?.kills||0,heads:c?.heads||0,hits:c?.hits||0,shots:c?.shots||0,dmg:c?.dmg||0,fav:c?.fav||'—',referral_code:c?.referral_code||null,pending_bonus:c?.pending_bonus||0,referred_by:c?.referred_by||null,...patch,updated_at:new Date().toISOString()};const {data,error}=await supabase.from(TABLE).upsert(row,{onConflict:'player_id'}).select('*').single();if(error)throw error;return data}
 async function authenticatedUser(req,res){const a=req.headers.authorization||'';if(!a.startsWith('Bearer ')){res.status(401).json({error:'Aucun token fourni.'});return null}const {data,error}=await supabase.auth.getUser(a.slice(7));if(error||!data?.user){res.status(401).json({error:'Token invalide ou expiré.'});return null}return data.user}
+
+
+// Agora Voice Chat — jetons RTC émis uniquement après authentification Supabase.
+// L'App Certificate reste exclusivement dans les variables d'environnement Render.
+app.post('/api/agora/token', rateLimit({windowMs:60000,max:20}), async (req,res) => {
+  try {
+    res.setHeader('Cache-Control','no-store');
+    const user = await authenticatedUser(req,res);
+    if(!user) return;
+    const appId = String(process.env.AGORA_APP_ID || 'a21afa951140483bae7b0d003ba6dd2f').trim();
+    const appCertificate = String(process.env.AGORA_APP_CERTIFICATE || '').trim();
+    if(!appCertificate) return res.status(503).json({error:'Le chat vocal Agora n’est pas encore configuré sur le serveur.'});
+    if(!/^[0-9a-f]{32}$/i.test(appId)) return res.status(503).json({error:'Configuration Agora invalide.'});
+    const requested = String(req.body?.channel || '').trim();
+    if(!/^(?:match_[A-Za-z0-9_-]{1,40}|(?:team|clan)_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i.test(requested)) return res.status(400).json({error:'Salon vocal invalide.'});
+    const teamMatch = requested.match(/^(?:team|clan)_([0-9a-f-]{36})$/i);
+    if(teamMatch){
+      const {data:membership,error:membershipError} = await supabase.from('ds_team_members').select('team_id').eq('team_id',teamMatch[1]).eq('user_id',user.id).maybeSingle();
+      if(membershipError) throw membershipError;
+      if(!membership) return res.status(403).json({error:'Tu ne fais pas partie de cette équipe.'});
+    }
+    const channel = 'dustsiege_' + requested;
+    const uid = createHash('sha256').update(String(user.id)).digest().readUInt32BE(0) || 1;
+    const tokenLifetimeSeconds = 3600;
+    const expireAt = Math.floor(Date.now()/1000) + tokenLifetimeSeconds;
+    // agora-token 2.x expects relative lifetimes in seconds, not Unix timestamps.
+    const token = RtcTokenBuilder.buildTokenWithUid(
+      appId, appCertificate, channel, uid, RtcRole.PUBLISHER,
+      tokenLifetimeSeconds, tokenLifetimeSeconds
+    );
+    res.json({appId,channel,uid,token,expireAt});
+  } catch(e) {
+    jsonError(res,e,'Impossible de créer le jeton vocal Agora.');
+  }
+});
 
 // Activation des routes Amis & équipes
 registerSocialRoutes(app, supabase, authenticatedUser);

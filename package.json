@@ -4,11 +4,16 @@
   "private": true,
   "type": "module",
   "main": "server.js",
-  "scripts": { "start": "node server.js" },
-  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "express": "^4.21.2",
     "@supabase/supabase-js": "^2",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "agora-token": "^2.0.7"
   }
 }
