@@ -1,7 +1,7 @@
 
 import express from 'express';
 import { createServer } from 'node:http';
-import { randomUUID, randomBytes } from 'node:crypto';
+import { createHash, randomUUID, randomBytes } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { supabase, authSupabase } from './supabase.js';
 import { registerSocialRoutes } from './social-routes.js';
@@ -165,6 +165,86 @@ app.get('/api/admin/live',async(req,res)=>{
     }));
     res.json({ok:true,websocket:true,activeRooms:active.length,onlinePlayers:active.reduce((n,r)=>n+r.players,0),rooms:active});
   }catch(e){jsonError(res,e,'Impossible de lire l’état des serveurs.')}
+});
+
+
+// Codes de récompense privés : seuls les développeurs autorisés peuvent créer et utiliser leurs propres codes.
+function normalizeAdminRewardCode(value) {
+  return String(value || '').toUpperCase().replace(/\\s+/g, '').replace(/[^A-Z0-9-]/g, '').slice(0, 40);
+}
+
+app.get('/api/admin/codes', async (req,res) => {
+  try {
+    res.setHeader('Cache-Control','no-store');
+    const user = await requireDeveloper(req,res); if(!user) return;
+    const [saveResult,codesResult,redemptionsResult] = await Promise.all([
+      supabase.from('game_saves').select('data').eq('user_id',user.id).maybeSingle(),
+      supabase.from('ds_admin_reward_codes')
+        .select('id,code_hint,reward_type,reward_amount,max_uses,used_count,expires_at,created_at')
+        .eq('created_by',user.id).order('created_at',{ascending:false}).limit(30),
+      supabase.from('ds_admin_reward_redemptions')
+        .select('id,code_id,reward_type,reward_amount,new_balance,redeemed_at')
+        .eq('user_id',user.id).order('redeemed_at',{ascending:false}).limit(30)
+    ]);
+    if(saveResult.error) throw saveResult.error;
+    if(codesResult.error) throw codesResult.error;
+    if(redemptionsResult.error) throw redemptionsResult.error;
+    const data = saveResult.data?.data || {};
+    res.json({
+      hasSave:!!saveResult.data,
+      wallet:{bank:num(data.bank),xp:num(data.xp)},
+      codes:codesResult.data||[],
+      redemptions:redemptionsResult.data||[]
+    });
+  } catch(e) { jsonError(res,e,'Impossible de charger les codes privés.'); }
+});
+
+app.post('/api/admin/codes/create', rateLimit({windowMs:60000,max:10}), async (req,res) => {
+  try {
+    res.setHeader('Cache-Control','no-store');
+    const user = await requireDeveloper(req,res); if(!user) return;
+    const supplied = normalizeAdminRewardCode(req.body?.code);
+    const code = supplied || ('DS-' + randomBytes(6).toString('hex').toUpperCase());
+    if(code.length < 6) return res.status(400).json({error:'Le code doit contenir au moins 6 caractères.'});
+    const rewardType = String(req.body?.rewardType||'bank');
+    if(!['bank','xp'].includes(rewardType)) return res.status(400).json({error:'Type de récompense invalide.'});
+    const rewardAmount = Math.floor(num(req.body?.amount,1,1000000000));
+    if(rewardAmount < 1) return res.status(400).json({error:'La récompense doit être supérieure à zéro.'});
+    const maxUses = Math.floor(num(req.body?.maxUses,1,100));
+    let expiresAt = null;
+    if(req.body?.expiresAt) {
+      const ms = Date.parse(req.body.expiresAt);
+      if(!Number.isFinite(ms) || ms <= Date.now()) return res.status(400).json({error:'La date d’expiration doit être dans le futur.'});
+      expiresAt = new Date(ms).toISOString();
+    }
+    const codeHash = createHash('sha256').update(code,'utf8').digest('hex');
+    const codeHint = code.length > 4 ? code.slice(0,2) + '•••' + code.slice(-2) : '••••';
+    const {data,error} = await supabase.from('ds_admin_reward_codes').insert({
+      code_hash:codeHash,code_hint:codeHint,reward_type:rewardType,reward_amount:rewardAmount,
+      max_uses:maxUses,expires_at:expiresAt,created_by:user.id
+    }).select('id,code_hint,reward_type,reward_amount,max_uses,used_count,expires_at,created_at').single();
+    if(error) {
+      if(error.code === '23505') return res.status(409).json({error:'Ce code existe déjà. Choisis-en un autre.'});
+      throw error;
+    }
+    res.status(201).json({ok:true,code,item:data});
+  } catch(e) { jsonError(res,e,'Impossible de créer ce code de récompense.'); }
+});
+
+app.post('/api/admin/codes/redeem', rateLimit({windowMs:60000,max:10}), async (req,res) => {
+  try {
+    res.setHeader('Cache-Control','no-store');
+    const user = await requireDeveloper(req,res); if(!user) return;
+    const code = normalizeAdminRewardCode(req.body?.code);
+    if(code.length < 6) return res.status(400).json({error:'Saisis un code valide.'});
+    const codeHash = createHash('sha256').update(code,'utf8').digest('hex');
+    const {data,error} = await supabase.rpc('ds_admin_redeem_reward_code',{
+      p_code_hash:codeHash,p_user_id:user.id
+    });
+    if(error) throw error;
+    if(!data?.ok) return res.status(400).json({error:data?.error||'Ce code ne peut pas être utilisé.'});
+    res.json(data);
+  } catch(e) { jsonError(res,e,'Impossible d’activer cette récompense.'); }
 });
 
 app.get('/api/sauvegarde',async(req,res)=>{try{const u=await authenticatedUser(req,res);if(!u)return;const {data,error}=await supabase.from('game_saves').select('data, updated_at').eq('user_id',u.id).maybeSingle();if(error)throw error;res.json({data:data?.data||{},updated_at:data?.updated_at||null})}catch(e){jsonError(res,e,'Impossible de charger la sauvegarde.')}});
