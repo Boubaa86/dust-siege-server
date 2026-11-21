@@ -5,7 +5,8 @@ import { createHash, randomUUID, randomBytes } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { supabase, authSupabase } from './supabase.js';
 import { registerSocialRoutes } from './social-routes.js';
-import { RtcTokenBuilder, RtcRole } from 'agora-token';
+import agoraToken from 'agora-token';
+const { RtcTokenBuilder, RtcRole } = agoraToken;
 
 const app=express(),server=createServer(app),wss=new WebSocketServer({server,path:'/',maxPayload:16*1024,perMessageDeflate:false});
 app.disable('x-powered-by');
