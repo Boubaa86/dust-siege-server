@@ -57,9 +57,12 @@ app.post('/api/agora/token', rateLimit({windowMs:60000,max:20}), async (req,res)
     if(!/^[A-Za-z0-9_-]{1,48}$/.test(requested)) return res.status(400).json({error:'Salon vocal invalide.'});
     const channel = 'dustsiege_' + requested;
     const uid = createHash('sha256').update(String(user.id)).digest().readUInt32BE(0) || 1;
-    const expireAt = Math.floor(Date.now()/1000) + 3600;
+    const tokenLifetimeSeconds = 3600;
+    const expireAt = Math.floor(Date.now()/1000) + tokenLifetimeSeconds;
+    // agora-token 2.x expects relative lifetimes in seconds, not Unix timestamps.
     const token = RtcTokenBuilder.buildTokenWithUid(
-      appId, appCertificate, channel, uid, RtcRole.PUBLISHER, expireAt, expireAt
+      appId, appCertificate, channel, uid, RtcRole.PUBLISHER,
+      tokenLifetimeSeconds, tokenLifetimeSeconds
     );
     res.json({appId,channel,uid,token,expireAt});
   } catch(e) {
