@@ -54,7 +54,13 @@ app.post('/api/agora/token', rateLimit({windowMs:60000,max:20}), async (req,res)
     if(!appCertificate) return res.status(503).json({error:'Le chat vocal Agora n’est pas encore configuré sur le serveur.'});
     if(!/^[0-9a-f]{32}$/i.test(appId)) return res.status(503).json({error:'Configuration Agora invalide.'});
     const requested = String(req.body?.channel || '').trim();
-    if(!/^[A-Za-z0-9_-]{1,48}$/.test(requested)) return res.status(400).json({error:'Salon vocal invalide.'});
+    if(!/^(?:match_[A-Za-z0-9_-]{1,40}|(?:team|clan)_[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i.test(requested)) return res.status(400).json({error:'Salon vocal invalide.'});
+    const teamMatch = requested.match(/^(?:team|clan)_([0-9a-f-]{36})$/i);
+    if(teamMatch){
+      const {data:membership,error:membershipError} = await supabase.from('ds_team_members').select('team_id').eq('team_id',teamMatch[1]).eq('user_id',user.id).maybeSingle();
+      if(membershipError) throw membershipError;
+      if(!membership) return res.status(403).json({error:'Tu ne fais pas partie de cette équipe.'});
+    }
     const channel = 'dustsiege_' + requested;
     const uid = createHash('sha256').update(String(user.id)).digest().readUInt32BE(0) || 1;
     const tokenLifetimeSeconds = 3600;
