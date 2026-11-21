@@ -261,7 +261,7 @@ app.get('/api/admin/economy',async(req,res)=>{
     if(saves.error)throw saves.error;
     const rows=saves.data||[];
     const totals=rows.reduce((a,r)=>{const d=r.data||{};a.bank+=num(d.bank);a.xp+=num(d.xp);a.withSave++;return a},{bank:0,xp:0,withSave:0});
-    res.json({sampledSaves:rows.length,...totals,topPlayers:(players.data||[]).slice(0,10).map(p=>({name:safeName(p.name),score:num(p.score),games:num(p.games),kills:num(p.kills)}))});
+    res.json({sampledSaves:rows.length,sampledPlayers:(players.data||[]).length,...totals,topPlayers:(players.data||[]).slice(0,10).map(p=>({name:safeName(p.name),score:num(p.score),games:num(p.games),kills:num(p.kills)}))});
   }catch(e){jsonError(res,e,'Impossible de charger les statistiques économiques.')}
 });
 app.get('/api/admin/tournaments',async(req,res)=>{
