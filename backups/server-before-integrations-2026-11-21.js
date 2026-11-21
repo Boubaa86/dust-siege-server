@@ -1,0 +1,338 @@
+
+import express from 'express';
+import { createServer } from 'node:http';
+import { createHash, randomUUID, randomBytes } from 'node:crypto';
+import { WebSocketServer, WebSocket } from 'ws';
+import { supabase, authSupabase } from './supabase.js';
+import { registerSocialRoutes } from './social-routes.js';
+
+const app=express(),server=createServer(app),wss=new WebSocketServer({server,path:'/',maxPayload:16*1024,perMessageDeflate:false});
+app.disable('x-powered-by');
+app.use(express.json({limit:'200kb'}));
+app.set('trust proxy',1);
+const rateBuckets=new Map();
+function rateLimit({windowMs=60000,max=40}={}) {
+  return (req,res,next)=>{
+    const now=Date.now(),key=(req.ip||req.socket.remoteAddress||'unknown')+':'+req.path;
+    let bucket=rateBuckets.get(key);
+    if(!bucket||now-bucket.start>=windowMs){bucket={start:now,count:0};rateBuckets.set(key,bucket)}
+    bucket.count++;
+    res.setHeader('RateLimit-Limit',String(max));
+    res.setHeader('RateLimit-Remaining',String(Math.max(0,max-bucket.count)));
+    if(bucket.count>max)return res.status(429).json({error:'Trop de requêtes. Réessaie dans un instant.'});
+    if(rateBuckets.size>4000){for(const [k,v] of rateBuckets)if(now-v.start>=windowMs)rateBuckets.delete(k)}
+    next();
+  };
+}
+app.use(['/score','/reg','/ref','/claim'],rateLimit({windowMs:60000,max:20}));
+app.use('/api/social',rateLimit({windowMs:60000,max:60}));
+
+app.use((req,res,next)=>{res.setHeader('Access-Control-Allow-Origin','*');res.setHeader('Access-Control-Allow-Headers','Content-Type, Authorization');res.setHeader('Access-Control-Allow-Methods','GET, PUT, POST, OPTIONS');if(req.method==='OPTIONS')return res.sendStatus(204);next()});
+app.use(express.static('.'));
+const TABLE='dust_siege_players';
+const safeId=v=>String(v||'').trim().slice(0,80);
+const safeName=v=>String(v||'Joueur').replace(/[<>\u0000-\u001f]/g,'').trim().slice(0,24)||'Joueur';
+const num=(v,min=0,max=1e9)=>Math.max(min,Math.min(max,Number.isFinite(+v)?+v:0));
+const jsonError=(res,e,msg)=>{console.error(msg,e?.message||e);return res.status(500).json({error:msg})};
+// Developer access is granted only to verified accounts listed in this server-side allowlist.
+const DEVELOPER_EMAILS=new Set(String(process.env.DS_DEVELOPER_EMAILS||'').split(',').map(v=>v.trim().toLowerCase()).filter(Boolean));
+async function getPlayer(id){const {data,error}=await supabase.from(TABLE).select('*').eq('player_id',safeId(id)).maybeSingle();if(error)throw error;return data}
+async function putPlayer(id,patch){const player_id=safeId(id);if(!player_id)throw new Error('Identifiant joueur manquant');const c=await getPlayer(player_id);const row={player_id,name:c?.name||'Joueur',score:c?.score||0,wave:c?.wave||0,games:c?.games||0,kills:c?.kills||0,heads:c?.heads||0,hits:c?.hits||0,shots:c?.shots||0,dmg:c?.dmg||0,fav:c?.fav||'—',referral_code:c?.referral_code||null,pending_bonus:c?.pending_bonus||0,referred_by:c?.referred_by||null,...patch,updated_at:new Date().toISOString()};const {data,error}=await supabase.from(TABLE).upsert(row,{onConflict:'player_id'}).select('*').single();if(error)throw error;return data}
+async function authenticatedUser(req,res){const a=req.headers.authorization||'';if(!a.startsWith('Bearer ')){res.status(401).json({error:'Aucun token fourni.'});return null}const {data,error}=await supabase.auth.getUser(a.slice(7));if(error||!data?.user){res.status(401).json({error:'Token invalide ou expiré.'});return null}return data.user}
+
+// Activation des routes Amis & équipes
+registerSocialRoutes(app, supabase, authenticatedUser);
+
+app.get('/api/profil',async(req,res)=>{try{const u=await authenticatedUser(req,res);if(!u)return;const verified=!!u.email_confirmed_at;const developer=verified&&DEVELOPER_EMAILS.has(String(u.email||'').toLowerCase());res.json({message:'Accès autorisé !',userId:u.id,email:u.email,developer,role:developer?'developer':'player'})}catch(e){jsonError(res,e,'Erreur interne du serveur.')}});
+
+app.post('/api/marketing/login',rateLimit({windowMs:60000,max:5}),async(req,res)=>{
+  try{
+    res.setHeader('Cache-Control','no-store');
+    const email=String(req.body?.email||'').trim().toLowerCase();
+    const password=String(req.body?.password||'');
+    if(!email||!password)return res.status(400).json({error:'E-mail et mot de passe requis.'});
+    const {data,error}=await authSupabase.auth.signInWithPassword({email,password});
+    if(error||!data?.user||!data?.session)return res.status(401).json({error:'Identifiants incorrects.'});
+    const user=data.user;
+    if(!user.email_confirmed_at)return res.status(403).json({error:'Confirme d’abord ton adresse e-mail.'});
+    if(!DEVELOPER_EMAILS.has(String(user.email||'').toLowerCase()))return res.status(403).json({error:'Ce compte n’a pas le rôle développeur Dust Siege.'});
+    res.json({access_token:data.session.access_token,refresh_token:data.session.refresh_token,expires_at:data.session.expires_at||null,user:{email:user.email,role:'developer'}});
+  }catch(e){jsonError(res,e,'Connexion au Centre Marketing impossible.')}
+});
+app.get('/api/marketing/overview',async(req,res)=>{
+  try{
+    res.setHeader('Cache-Control','no-store');
+    const u=await authenticatedUser(req,res);if(!u)return;
+    if(!u.email_confirmed_at||!DEVELOPER_EMAILS.has(String(u.email||'').toLowerCase()))return res.status(403).json({error:'Accès développeur requis.'});
+    const [playersResult,topResult]=await Promise.all([
+      supabase.from(TABLE).select('player_id,name,score,wave,games,kills,updated_at',{count:'exact'}).order('updated_at',{ascending:false}).limit(1000),
+      supabase.from(TABLE).select('name,score,wave').order('score',{ascending:false}).limit(10)
+    ]);
+    if(playersResult.error)throw playersResult.error;
+    if(topResult.error)throw topResult.error;
+    const rows=playersResult.data||[],top=topResult.data||[];
+    const cutoff=Date.now()-7*24*60*60*1000;
+    const active7d=rows.filter(p=>p.updated_at&&Date.parse(p.updated_at)>=cutoff).length;
+    const games=rows.reduce((n,p)=>n+Number(p.games||0),0);
+    const kills=rows.reduce((n,p)=>n+Number(p.kills||0),0);
+    res.json({
+      generatedAt:new Date().toISOString(),
+      totalPlayers:Number(playersResult.count??rows.length),
+      sampledPlayers:rows.length,
+      activePlayers7d:active7d,
+      gamesInSample:games,
+      killsInSample:kills,
+      topPlayers:top.map(p=>({name:safeName(p.name),score:num(p.score),wave:num(p.wave)})),
+      recentPlayers:rows.slice(0,10).map(p=>({name:safeName(p.name),score:num(p.score),wave:num(p.wave),updatedAt:p.updated_at||null}))
+    });
+  }catch(e){jsonError(res,e,'Impossible de charger les données du Centre Marketing.')}
+});
+
+
+// Console d'administration Dust Siege : lecture seule, réservée aux développeurs autorisés.
+async function requireDeveloper(req,res){
+  const user=await authenticatedUser(req,res);
+  if(!user)return null;
+  if(!user.email_confirmed_at||!DEVELOPER_EMAILS.has(String(user.email||'').toLowerCase())){
+    res.status(403).json({error:'Accès développeur requis.'});
+    return null;
+  }
+  return user;
+}
+
+app.get('/api/admin/overview',async(req,res)=>{
+  try{
+    res.setHeader('Cache-Control','no-store');
+    const user=await requireDeveloper(req,res);if(!user)return;
+    const [countResult,playersResult,topResult]=await Promise.all([
+      supabase.from(TABLE).select('player_id',{count:'exact',head:true}),
+      supabase.from(TABLE).select('player_id,name,score,wave,games,kills,updated_at').order('updated_at',{ascending:false}).limit(1000),
+      supabase.from(TABLE).select('name,score,wave').order('score',{ascending:false}).limit(8)
+    ]);
+    if(countResult.error)throw countResult.error;
+    if(playersResult.error)throw playersResult.error;
+    if(topResult.error)throw topResult.error;
+    const rows=playersResult.data||[];
+    const cutoff=Date.now()-7*24*60*60*1000;
+    const onlineRooms=Array.from(rooms.values());
+    const onlinePlayers=onlineRooms.reduce((n,r)=>n+r.players.size,0);
+    res.json({
+      generatedAt:new Date().toISOString(),
+      totalPlayers:Number(countResult.count??0),
+      sampledPlayers:rows.length,
+      activePlayers7d:rows.filter(p=>p.updated_at&&Date.parse(p.updated_at)>=cutoff).length,
+      gamesInSample:rows.reduce((n,p)=>n+Number(p.games||0),0),
+      killsInSample:rows.reduce((n,p)=>n+Number(p.kills||0),0),
+      onlinePlayers,
+      activeRooms:onlineRooms.length,
+      topPlayers:(topResult.data||[]).map(p=>({name:safeName(p.name),score:num(p.score),wave:num(p.wave)})),
+      recentPlayers:rows.slice(0,8).map(p=>({name:safeName(p.name),score:num(p.score),wave:num(p.wave),updatedAt:p.updated_at||null}))
+    });
+  }catch(e){jsonError(res,e,'Impossible de charger le tableau de bord administrateur.')}
+});
+
+app.get('/api/admin/players',async(req,res)=>{
+  try{
+    res.setHeader('Cache-Control','no-store');
+    const user=await requireDeveloper(req,res);if(!user)return;
+    const q=String(req.query.q||'').replace(/[^a-zA-Z0-9 _.-]/g,'').trim().slice(0,50);
+    const limit=Math.floor(num(req.query.limit??25,1,50));
+    const offset=Math.floor(num(req.query.offset??0,0,100000));
+    let query=supabase.from(TABLE)
+      .select('player_id,name,score,wave,games,kills,heads,hits,shots,dmg,updated_at',{count:'exact'})
+      .order('updated_at',{ascending:false})
+      .range(offset,offset+limit-1);
+    if(q)query=query.or(`name.ilike.%${q}%,player_id.ilike.%${q}%`);
+    const {data,error,count}=await query;
+    if(error)throw error;
+    res.json({items:(data||[]).map(p=>({
+      playerId:safeId(p.player_id),name:safeName(p.name),score:num(p.score),wave:num(p.wave),
+      games:num(p.games),kills:num(p.kills),heads:num(p.heads),hits:num(p.hits),shots:num(p.shots),
+      damage:num(p.dmg),updatedAt:p.updated_at||null
+    })),total:Number(count??0),limit,offset});
+  }catch(e){jsonError(res,e,'Impossible de charger la liste des joueurs.')}
+});
+
+app.get('/api/admin/live',async(req,res)=>{
+  try{
+    res.setHeader('Cache-Control','no-store');
+    const user=await requireDeveloper(req,res);if(!user)return;
+    const active=Array.from(rooms.values()).map(r=>({
+      room:String(r.name||'').slice(0,60),
+      mode:r.arena?'Arène':'Coopération',
+      players:r.players.size,
+      wave:r.arena?num(r.wave):null
+    }));
+    res.json({ok:true,websocket:true,activeRooms:active.length,onlinePlayers:active.reduce((n,r)=>n+r.players,0),rooms:active});
+  }catch(e){jsonError(res,e,'Impossible de lire l’état des serveurs.')}
+});
+
+
+// Codes de récompense privés : seuls les développeurs autorisés peuvent créer et utiliser leurs propres codes.
+function normalizeAdminRewardCode(value) {
+  return String(value || '').toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 40);
+}
+
+app.get('/api/admin/codes', async (req,res) => {
+  try {
+    res.setHeader('Cache-Control','no-store');
+    const user = await requireDeveloper(req,res); if(!user) return;
+    const [saveResult,codesResult,redemptionsResult] = await Promise.all([
+      supabase.from('game_saves').select('data').eq('user_id',user.id).maybeSingle(),
+      supabase.from('ds_admin_reward_codes')
+        .select('id,code_hint,reward_type,reward_amount,max_uses,used_count,expires_at,created_at')
+        .eq('created_by',user.id).order('created_at',{ascending:false}).limit(30),
+      supabase.from('ds_admin_reward_redemptions')
+        .select('id,code_id,reward_type,reward_amount,new_balance,redeemed_at')
+        .eq('user_id',user.id).order('redeemed_at',{ascending:false}).limit(30)
+    ]);
+    if(saveResult.error) throw saveResult.error;
+    if(codesResult.error) throw codesResult.error;
+    if(redemptionsResult.error) throw redemptionsResult.error;
+    const data = saveResult.data?.data || {};
+    res.json({
+      hasSave:!!saveResult.data,
+      wallet:{bank:num(data.bank),xp:num(data.xp)},
+      codes:codesResult.data||[],
+      redemptions:redemptionsResult.data||[]
+    });
+  } catch(e) { jsonError(res,e,'Impossible de charger les codes privés.'); }
+});
+
+app.post('/api/admin/codes/create', rateLimit({windowMs:60000,max:10}), async (req,res) => {
+  try {
+    res.setHeader('Cache-Control','no-store');
+    const user = await requireDeveloper(req,res); if(!user) return;
+    const supplied = normalizeAdminRewardCode(req.body?.code);
+    const code = supplied || ('DS-' + randomBytes(6).toString('hex').toUpperCase());
+    if(code.length < 6) return res.status(400).json({error:'Le code doit contenir au moins 6 caractères.'});
+    const rewardType = String(req.body?.rewardType||'bank');
+    if(!['bank','xp'].includes(rewardType)) return res.status(400).json({error:'Type de récompense invalide.'});
+    const rewardAmount = Math.floor(num(req.body?.amount,1,1000000000));
+    if(rewardAmount < 1) return res.status(400).json({error:'La récompense doit être supérieure à zéro.'});
+    const maxUses = Math.floor(num(req.body?.maxUses,1,100));
+    let expiresAt = null;
+    if(req.body?.expiresAt) {
+      const ms = Date.parse(req.body.expiresAt);
+      if(!Number.isFinite(ms) || ms <= Date.now()) return res.status(400).json({error:'La date d’expiration doit être dans le futur.'});
+      expiresAt = new Date(ms).toISOString();
+    }
+    const codeHash = createHash('sha256').update(code,'utf8').digest('hex');
+    const codeHint = code.length > 4 ? code.slice(0,2) + '•••' + code.slice(-2) : '••••';
+    const {data,error} = await supabase.from('ds_admin_reward_codes').insert({
+      code_hash:codeHash,code_hint:codeHint,reward_type:rewardType,reward_amount:rewardAmount,
+      max_uses:maxUses,expires_at:expiresAt,created_by:user.id
+    }).select('id,code_hint,reward_type,reward_amount,max_uses,used_count,expires_at,created_at').single();
+    if(error) {
+      if(error.code === '23505') return res.status(409).json({error:'Ce code existe déjà. Choisis-en un autre.'});
+      throw error;
+    }
+    res.status(201).json({ok:true,code,item:data});
+  } catch(e) { jsonError(res,e,'Impossible de créer ce code de récompense.'); }
+});
+
+app.post('/api/admin/codes/redeem', rateLimit({windowMs:60000,max:10}), async (req,res) => {
+  try {
+    res.setHeader('Cache-Control','no-store');
+    const user = await requireDeveloper(req,res); if(!user) return;
+    const code = normalizeAdminRewardCode(req.body?.code);
+    if(code.length < 6) return res.status(400).json({error:'Saisis un code valide.'});
+    const codeHash = createHash('sha256').update(code,'utf8').digest('hex');
+    const {data,error} = await supabase.rpc('ds_admin_redeem_reward_code',{
+      p_code_hash:codeHash,p_user_id:user.id
+    });
+    if(error) throw error;
+    if(!data?.ok) return res.status(400).json({error:data?.error||'Ce code ne peut pas être utilisé.'});
+    res.json(data);
+  } catch(e) { jsonError(res,e,'Impossible d’activer cette récompense.'); }
+});
+
+
+/* Admin expansion: read-only analytics, economy, tournaments and private developer sandbox. */
+app.get('/api/admin/economy',async(req,res)=>{
+  try{
+    res.setHeader('Cache-Control','no-store');
+    const user=await requireDeveloper(req,res);if(!user)return;
+    const [players,saves]=await Promise.all([
+      supabase.from(TABLE).select('player_id,name,score,games,kills,updated_at').order('score',{ascending:false}).limit(1000),
+      supabase.from('game_saves').select('user_id,data,updated_at').limit(1000)
+    ]);
+    if(players.error)throw players.error;
+    if(saves.error)throw saves.error;
+    const rows=saves.data||[];
+    const totals=rows.reduce((a,r)=>{const d=r.data||{};a.bank+=num(d.bank);a.xp+=num(d.xp);a.withSave++;return a},{bank:0,xp:0,withSave:0});
+    res.json({sampledSaves:rows.length,sampledPlayers:(players.data||[]).length,...totals,topPlayers:(players.data||[]).slice(0,10).map(p=>({name:safeName(p.name),score:num(p.score),games:num(p.games),kills:num(p.kills)}))});
+  }catch(e){jsonError(res,e,'Impossible de charger les statistiques économiques.')}
+});
+app.get('/api/admin/tournaments',async(req,res)=>{
+  try{
+    res.setHeader('Cache-Control','no-store');
+    const user=await requireDeveloper(req,res);if(!user)return;
+    const {data,error}=await supabase.from('game_scores').select('id,name,score,wave,updated_at').order('score',{ascending:false}).limit(50);
+    if(error)throw error;
+    res.json({items:(data||[]).map(p=>({id:safeId(p.id),name:safeName(p.name),score:num(p.score),wave:num(p.wave),updatedAt:p.updated_at||null})),source:'game_scores'});
+  }catch(e){jsonError(res,e,'Impossible de charger le classement des tournois.')}
+});
+app.get('/api/admin/diagnostics',async(req,res)=>{
+  try{
+    res.setHeader('Cache-Control','no-store');
+    const user=await requireDeveloper(req,res);if(!user)return;
+    const [players,saves]=await Promise.all([
+      supabase.from(TABLE).select('player_id',{count:'exact',head:true}),
+      supabase.from('game_saves').select('user_id',{count:'exact',head:true})
+    ]);
+    if(players.error)throw players.error;
+    if(saves.error)throw saves.error;
+    res.json({ok:true,api:'operational',database:'operational',websocket:'operational',playerRecords:Number(players.count||0),saveRecords:Number(saves.count||0),activeRooms:rooms.size,onlinePlayers:Array.from(rooms.values()).reduce((n,r)=>n+r.players.size,0),checkedAt:new Date().toISOString(),version:'admin-expansion-1'});
+  }catch(e){jsonError(res,e,'Diagnostic indisponible.')}
+});
+app.get('/api/admin/godmode',async(req,res)=>{
+  try{
+    res.setHeader('Cache-Control','no-store');
+    const user=await requireDeveloper(req,res);if(!user)return;
+    const {data,error}=await supabase.from('game_saves').select('data,updated_at').eq('user_id',user.id).maybeSingle();
+    if(error)throw error;
+    const save=data?.data||{};
+    res.json({role:'developer',email:user.email,userId:user.id,hasSave:!!data,wallet:{bank:num(save.bank),xp:num(save.xp)},saveUpdatedAt:data?.updated_at||null,productionWritesEnabled:false});
+  }catch(e){jsonError(res,e,'Impossible de charger le mode Dieu.')}
+});
+
+app.get('/api/sauvegarde',async(req,res)=>{try{const u=await authenticatedUser(req,res);if(!u)return;const {data,error}=await supabase.from('game_saves').select('data, updated_at').eq('user_id',u.id).maybeSingle();if(error)throw error;res.json({data:data?.data||{},updated_at:data?.updated_at||null})}catch(e){jsonError(res,e,'Impossible de charger la sauvegarde.')}});
+app.put('/api/sauvegarde',async(req,res)=>{try{const u=await authenticatedUser(req,res);if(!u)return;const d=req.body?.data;if(!d||typeof d!=='object'||Array.isArray(d))return res.status(400).json({error:'Données de sauvegarde invalides.'});const {error}=await supabase.from('game_saves').upsert({user_id:u.id,data:d,updated_at:new Date().toISOString()},{onConflict:'user_id'});if(error)throw error;res.json({ok:true})}catch(e){jsonError(res,e,'Impossible d’enregistrer la sauvegarde.')}});
+app.post('/score',async(req,res)=>{try{const id=safeId(req.body?.id);if(!id)return res.status(400).json({error:'Identifiant joueur manquant.'});const old=await getPlayer(id),score=Math.floor(num(req.body?.score)),wave=Math.floor(num(req.body?.wave,0,10000));const p=await putPlayer(id,{name:safeName(req.body?.name),score:Math.max(old?.score||0,score),wave:Math.max(old?.wave||0,wave),games:(old?.games||0)+1});res.json({ok:true,score:p.score,wave:p.wave})}catch(e){jsonError(res,e,'Impossible d’enregistrer le score. Vérifie la table Dust Siege dans Supabase.')}});
+app.get('/top',async(_req,res)=>{try{const {data,error}=await supabase.from(TABLE).select('name, score, wave').order('score',{ascending:false}).limit(20);if(error)throw error;res.json((data||[]).map(p=>({n:p.name||'Joueur',s:p.score||0,w:p.wave||0})))}catch(e){jsonError(res,e,'Impossible de charger le classement.')}});
+app.get('/tournoi',async(_req,res)=>{try{const now=new Date(),start=new Date(now);start.setUTCHours(0,0,0,0);start.setUTCDate(start.getUTCDate()-((start.getUTCDay()+6)%7));const end=new Date(start);end.setUTCDate(end.getUTCDate()+7);const {data,error}=await supabase.from(TABLE).select('name, score, wave, updated_at').gte('updated_at',start.toISOString()).lt('updated_at',end.toISOString()).order('score',{ascending:false}).limit(20);if(error)throw error;res.json({endsIn:Math.max(0,end-now),list:(data||[]).map(p=>({n:p.name||'Joueur',s:p.score||0,w:p.wave||0}))})}catch(e){jsonError(res,e,'Impossible de charger le tournoi.')}});
+app.get('/stats',async(req,res)=>{try{const p=await getPlayer(req.query.id);if(!p)return res.json({games:0,kills:0,heads:0,acc:0,hits:0,shots:0,dmg:0,best:0,wave:0,fav:'—',tier:'Recrue',r:0});const r=Math.floor((p.score||0)/100),tiers=['Recrue','Soldat','Vétéran','Élite','Légende'];res.json({games:p.games||0,kills:p.kills||0,heads:p.heads||0,hits:p.hits||0,shots:p.shots||0,acc:p.shots?Math.round((p.hits||0)/p.shots*100):0,dmg:p.dmg||0,best:p.score||0,wave:p.wave||0,fav:p.fav||'—',tier:tiers[Math.min(4,Math.floor(r/100))],r})}catch(e){jsonError(res,e,'Impossible de charger les statistiques.')}});
+app.get('/shop',(_req,res)=>res.json({offers:[]}));app.get('/replay',(_req,res)=>res.json({frames:[]}));
+app.post('/reg',async(req,res)=>{try{const id=safeId(req.body?.id);if(!id)return res.status(400).json({error:'Identifiant joueur manquant.'});let p=await getPlayer(id);if(!p?.referral_code)p=await putPlayer(id,{name:safeName(req.body?.name),referral_code:'AMI-'+randomBytes(3).toString('hex').toUpperCase()});res.json({code:p.referral_code})}catch(e){jsonError(res,e,'Impossible de créer le code de parrainage.')}});
+app.post('/ref',async(req,res)=>{try{const id=safeId(req.body?.id),code=String(req.body?.code||'').trim().toUpperCase();if(!id||!code)return res.status(400).json({ok:false,err:'Code ou joueur manquant.'});const {data:ref,error}=await supabase.from(TABLE).select('player_id,pending_bonus').eq('referral_code',code).maybeSingle();if(error)throw error;if(!ref)return res.json({ok:false,err:'Code invalide.'});if(ref.player_id===id)return res.json({ok:false,err:'Tu ne peux pas utiliser ton propre code.'});const me=await getPlayer(id);if(me?.referred_by)return res.json({ok:false,err:'Tu as déjà utilisé un code.'});await putPlayer(ref.player_id,{pending_bonus:(ref.pending_bonus||0)+1000});await putPlayer(id,{referred_by:ref.player_id});res.json({ok:true,bonus:1000})}catch(e){jsonError(res,e,'Impossible de valider le parrainage.')}});
+app.get('/claim',async(req,res)=>{try{const id=safeId(req.query.id),p=await getPlayer(id);if(!p)return res.json({pending:0});const pending=p.pending_bonus||0;if(pending>0)await putPlayer(id,{pending_bonus:0});res.json({pending})}catch(e){jsonError(res,e,'Impossible de récupérer le bonus.')}});
+
+// Arène autoritaire : mouvement, ennemis, tirs et dégâts calculés côté serveur.
+const rooms=new Map(),send=(ws,d)=>{if(ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify(d))},broadcast=(r,d)=>{for(const p of r.players.values())send(p.ws,d)};
+const randSpawn=()=>{const a=Math.random()*Math.PI*2,r=5+Math.random()*5;return{x:Math.cos(a)*r,z:Math.sin(a)*r}};
+function makeRoom(name,arena){return{name,arena,players:new Map(),host:null,wave:1,enemies:[],enemyId:1,nextWaveAt:0,tick:null}}
+function spawnEnemy(r){const a=Math.random()*Math.PI*2,rad=28+Math.random()*8,boss=r.wave%5===0&&r.enemies.filter(e=>!e.dead).length===0;r.enemies.push({id:r.enemyId++,x:Math.cos(a)*rad,z:Math.sin(a)*rad,yaw:0,hp:boss?900+r.wave*80:90+r.wave*12,maxHp:boss?900+r.wave*80:90+r.wave*12,boss,dead:false,lastAttack:0})}
+function state(r){return{t:'st',w:r.wave,en:r.enemies.map(e=>[e.id,e.x,e.z,e.yaw,Math.max(0,Math.round(e.hp)),e.boss?'k':'',e.boss?1:0,e.dead?1:0]),pl:[...r.players.values()].map(p=>[p.id,p.x,p.z,p.ya,p.hp,0,p.alive?1:0])}}
+function saveArenaPlayer(p,r){if(p.saved||!p.uid||p.uid==='anon')return;p.saved=true;getPlayer(p.uid).then(old=>putPlayer(p.uid,{name:p.name,score:Math.max(old?.score||0,p.score),wave:Math.max(old?.wave||0,r.wave),games:(old?.games||0)+1,kills:(old?.kills||0)+p.kills,hits:(old?.hits||0)+p.hits,shots:(old?.shots||0)+p.shots})).catch(e=>console.error('Stats arène:',e.message))}
+function startArenaLoop(r){if(r.tick)return;r.tick=setInterval(()=>{if(!r.players.size){clearInterval(r.tick);r.tick=null;rooms.delete(r.name);return}const now=Date.now(),alive=[...r.players.values()].filter(p=>p.alive);
+ if(!r.enemies.some(e=>!e.dead)&&now>=r.nextWaveAt){if(r.enemies.length)r.wave++;r.enemies=[];for(let i=0;i<Math.min(3+r.wave,12);i++)spawnEnemy(r);r.nextWaveAt=now+2500}
+ for(const e of r.enemies){if(e.dead||!alive.length)continue;const target=alive.reduce((a,b)=>Math.hypot(a.x-e.x,a.z-e.z)<Math.hypot(b.x-e.x,b.z-e.z)?a:b),dx=target.x-e.x,dz=target.z-e.z,d=Math.hypot(dx,dz)||1;e.yaw=Math.atan2(dx,dz);if(d>2.2){const step=Math.min(d-2.2,0.9*.1);e.x+=dx/d*step;e.z+=dz/d*step}else if(now-e.lastAttack>1800&&now>=target.invulnerableUntil){e.lastAttack=now;target.hp=Math.max(0,target.hp-3);if(target.hp<=0){target.alive=false;target.respawnAt=now+5000;send(target.ws,{t:'dead'})}}}
+ for(const p of r.players.values()){if(!p.alive&&now>=p.respawnAt){const q=randSpawn();p.x=q.x;p.z=q.z;p.hp=100;p.alive=true;p.invulnerableUntil=now+3000;send(p.ws,{t:'resp',x:p.x,z:p.z})}}
+ broadcast(r,state(r));},100)}
+function dropPlayer(r,p){r.players.delete(p.id);broadcast(r,{t:'peer-',id:p.id});if(r.host===p.id){r.host=r.players.keys().next().value||null;if(r.host)broadcast(r,{t:'host',id:r.host})}if(r.arena)saveArenaPlayer(p,r);if(!r.players.size){if(r.tick)clearInterval(r.tick);rooms.delete(r.name)}}
+wss.on('connection',ws=>{ws.on('message',raw=>{let m;try{m=JSON.parse(raw.toString())}catch{return}if(!m||typeof m.t!=='string')return;
+ if(m.t==='join'){const name=String(m.room||'salon').replace(/[^a-zA-Z0-9_-]/g,'').slice(0,40)||'salon',arena=!!m.auth,key=(arena?'arena:':'coop:')+name;let r=rooms.get(key);if(!r){r=makeRoom(key,arena);rooms.set(key,r)}if(r.players.size>=12)return send(ws,{t:'full'});const id=randomUUID().slice(0,8),q=arena?randSpawn():{x:0,z:0},p={id,uid:safeId(m.uid),ws,name:safeName(m.name),x:q.x,z:q.z,ya:0,hp:100,alive:true,respawnAt:0,score:0,kills:0,shots:0,hits:0,lastInputAt:Date.now(),lastShotAt:0,weapon:0,saved:false,invulnerableUntil:Date.now()+3000};r.players.set(id,p);ws.room=r;ws.player=p;const host=r.host||id;send(ws,{t:'welcome',id,host,x:p.x,z:p.z,peers:[...r.players.values()].filter(x=>x.id!==id).map(x=>({id:x.id}))});if(!r.host)r.host=id;broadcast(r,{t:'peer+',id});if(arena){startArenaLoop(r);send(ws,state(r))}return}
+ const r=ws.room,p=ws.player;if(!r||!p)return;
+ if(m.t==='p'&&!r.arena){p.x=num(m.x,-1000,1000);p.z=num(m.z,-1000,1000);p.ya=num(m.ya,-20,20);broadcast(r,{...m,t:'p',from:p.id})}
+ else if(m.t==='en'&&!r.arena&&p.id===r.host)broadcast(r,m)
+ else if(m.t==='hit'&&!r.arena)broadcast(r,{...m,from:p.id})
+ else if(m.t==='kill'&&!r.arena)broadcast(r,{...m,from:p.id})
+ else if(m.t==='dmg'&&!r.arena){const t=[...r.players.values()].find(x=>x.id===m.to);if(t)send(t.ws,{...m,from:p.id})}
+ else if(m.t==='in'&&r.arena&&p.alive){const now=Date.now(),dt=Math.max(.03,Math.min(.25,(now-p.lastInputAt)/1000));p.lastInputAt=now;const tx=num(m.x,-45,45),tz=num(m.z,-45,45),dx=tx-p.x,dz=tz-p.z,d=Math.hypot(dx,dz),maxStep=9.5*dt+.18;if(d>maxStep&&d>0){p.x+=dx/d*maxStep;p.z+=dz/d*maxStep}else{p.x=tx;p.z=tz}p.ya=num(m.ya,-Math.PI*20,Math.PI*20);p.weapon=Math.floor(num(m.w,0,2))}
+ else if(m.t==='shot'&&r.arena&&p.alive){const w=Math.floor(num(m.w,0,2)),cool=[90,600,900][w];if(Date.now()-p.lastShotAt<cool)return;p.lastShotAt=Date.now();p.shots++;const dx=num(m.dx,-1,1),dz=num(m.dz,-1,1),len=Math.hypot(dx,dz)||1,ux=dx/len,uz=dz/len,range=[65,24,90][w],width=w===1?2.8:1.05;let best=null,bestAlong=range+1,bestSide=width;for(const e of r.enemies){if(e.dead)continue;const ex=e.x-p.x,ez=e.z-p.z,along=ex*ux+ez*uz,side=Math.abs(ex*uz-ez*ux);if(along>=0&&along<=range&&side<bestSide&&along<bestAlong){best=e;bestAlong=along;bestSide=side}}if(best){p.hits++;const damage=[34,15,130][w];best.hp-=damage;if(best.hp<=0){best.dead=true;p.kills++;p.score+=best.boss?500:100;send(p.ws,{t:'kill',hd:0,boss:best.boss?1:0})}}}
+ else if(m.t==='finish'&&r.arena)saveArenaPlayer(p,r);
+ });ws.on('close',()=>{const r=ws.room,p=ws.player;if(r&&p)dropPlayer(r,p)});});
+const heartbeat=setInterval(()=>{for(const ws of wss.clients){if(ws.readyState!==WebSocket.OPEN)continue;if(ws.isAlive===false){ws.terminate();continue}ws.isAlive=false;ws.ping()}},30000);wss.on('connection',ws=>{ws.isAlive=true;ws.on('pong',()=>ws.isAlive=true)});
+app.get('/health',(_req,res)=>res.json({ok:true,websocket:true,arenaAuthority:true}));
+const PORT=process.env.PORT||3000;server.listen(PORT,()=>console.log(`Dust Siege API + WebSocket en écoute sur ${PORT}`));
