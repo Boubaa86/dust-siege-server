@@ -34,6 +34,23 @@ app.use(express.static('.'));
 const TABLE='dust_siege_players';
 const safeId=v=>String(v||'').trim().slice(0,80);
 const safeName=v=>String(v||'Joueur').replace(/[<>\u0000-\u001f]/g,'').trim().slice(0,24)||'Joueur';
+const NAME_PARTS_A=['Shadow','Ghost','Iron','Dark','Storm','Silent','Frost','Rogue','Steel','Night','Rapid','Crimson','Phantom','Wild','Blaze','Toxic'];
+const NAME_PARTS_B=['Wolf','Viper','Falcon','Sniper','Raven','Tiger','Hawk','Panther','Reaper','Eagle','Fox','Hunter','Dragon','Specter','Warden','Cobra'];
+async function ensurePlayerProfile(user){
+  const playerId=safeId(user?.id);
+  if(!playerId)throw new Error('Identifiant de compte manquant');
+  const player=await getPlayer(playerId);
+  if(player?.name&&player.name!=='Joueur')return player;
+  for(let attempt=0;attempt<20;attempt++){
+    const a=NAME_PARTS_A[Math.floor(Math.random()*NAME_PARTS_A.length)];
+    const b=NAME_PARTS_B[Math.floor(Math.random()*NAME_PARTS_B.length)];
+    const candidate=safeName(a+b+'_'+String(Math.floor(1000+Math.random()*9000)));
+    const {data,error}=await supabase.from(TABLE).select('player_id').eq('name',candidate).maybeSingle();
+    if(error)throw error;
+    if(!data)return await putPlayer(playerId,{name:candidate});
+  }
+  return await putPlayer(playerId,{name:'Soldat_'+randomBytes(4).toString('hex').toUpperCase()});
+}
 const num=(v,min=0,max=1e9)=>Math.max(min,Math.min(max,Number.isFinite(+v)?+v:0));
 const jsonError=(res,e,msg)=>{console.error(msg,e?.message||e);return res.status(500).json({error:msg})};
 // Developer access is granted only to verified accounts listed in this server-side allowlist.
@@ -80,7 +97,7 @@ app.post('/api/agora/token', rateLimit({windowMs:60000,max:20}), async (req,res)
 // Activation des routes Amis & équipes
 registerSocialRoutes(app, supabase, authenticatedUser);
 
-app.get('/api/profil',async(req,res)=>{try{const u=await authenticatedUser(req,res);if(!u)return;const verified=!!u.email_confirmed_at;const developer=verified&&DEVELOPER_EMAILS.has(String(u.email||'').toLowerCase());res.json({message:'Accès autorisé !',userId:u.id,email:u.email,developer,role:developer?'developer':'player'})}catch(e){jsonError(res,e,'Erreur interne du serveur.')}});
+app.get('/api/profil',async(req,res)=>{try{const u=await authenticatedUser(req,res);if(!u)return;const profile=await ensurePlayerProfile(u);const verified=!!u.email_confirmed_at;const developer=verified&&DEVELOPER_EMAILS.has(String(u.email||'').toLowerCase());res.json({message:'Accès autorisé !',userId:u.id,email:u.email,name:profile.name,pseudo:profile.name,developer,role:developer?'developer':'player'})}catch(e){jsonError(res,e,'Erreur interne du serveur.')}});
 
 app.post('/api/marketing/login',rateLimit({windowMs:60000,max:5}),async(req,res)=>{
   try{
