@@ -216,7 +216,7 @@ app.post('/api/admin/messages',rateLimit({windowMs:60000,max:20}),async(req,res)
   try{
     res.setHeader('Cache-Control','no-store');
     const admin=await requireDeveloper(req,res);if(!admin)return;
-    const message=String(req.body?.message||'').replace(/[<>\\u0000-\\u001f]/g,' ').trim().slice(0,500);
+    const message=String(req.body?.message||'').replace(/[<>\\x00-\\x1f]/g,' ').trim().slice(0,500);
     const isBroadcast=req.body?.broadcast===true;
     const targetUserId=String(req.body?.targetUserId||'').trim();
     if(!message)return res.status(400).json({error:'Le message est vide.'});
