@@ -154,6 +154,89 @@ async function requireDeveloper(req,res){
   return user;
 }
 
+const onlineSnapshot=()=>{
+  const seen=new Map();
+  for(const room of rooms.values()) for(const p of room.players.values()) {
+    if(!p.uid||p.uid==='anon') continue;
+    const row=seen.get(p.uid)||{userId:p.uid,name:safeName(p.name),rooms:[],connected:true};
+    if(!row.rooms.includes(String(room.name||'').slice(0,60))) row.rooms.push(String(room.name||'').slice(0,60));
+    seen.set(p.uid,row);
+  }
+  return [...seen.values()];
+};
+
+// Les e-mails ne sont révélés qu'après un choix explicite du joueur.
+app.get('/api/player/email-consent',async(req,res)=>{
+  try{
+    res.setHeader('Cache-Control','no-store');
+    const user=await authenticatedUser(req,res);if(!user)return;
+    const {data,error}=await supabase.from('ds_player_email_consents').select('share_email,consented_at').eq('user_id',user.id).maybeSingle();
+    if(error)throw error;
+    res.json({shareEmail:!!data?.share_email,consentedAt:data?.consented_at||null});
+  }catch(e){jsonError(res,e,'Impossible de lire le choix de confidentialité.')}
+});
+app.put('/api/player/email-consent',rateLimit({windowMs:60000,max:8}),async(req,res)=>{
+  try{
+    res.setHeader('Cache-Control','no-store');
+    const user=await authenticatedUser(req,res);if(!user)return;
+    if(!user.email_confirmed_at)return res.status(403).json({error:'Confirme ton adresse e-mail avant de modifier ce choix.'});
+    if(typeof req.body?.shareEmail!=='boolean')return res.status(400).json({error:'Choix de partage invalide.'});
+    const share_email=req.body.shareEmail;
+    const {error}=await supabase.from('ds_player_email_consents').upsert({
+      user_id:user.id,share_email,consented_at:share_email?new Date().toISOString():null,updated_at:new Date().toISOString()
+    },{onConflict:'user_id'});
+    if(error)throw error;
+    res.json({ok:true,shareEmail:share_email});
+  }catch(e){jsonError(res,e,'Impossible d’enregistrer le choix de confidentialité.')}
+});
+
+app.get('/api/admin/online',async(req,res)=>{
+  try{
+    res.setHeader('Cache-Control','no-store');
+    const user=await requireDeveloper(req,res);if(!user)return;
+    const players=onlineSnapshot();
+    if(!players.length)return res.json({items:[],total:0});
+    const ids=players.map(p=>p.userId);
+    const {data:consents,error}=await supabase.from('ds_player_email_consents').select('user_id,share_email,consented_at').in('user_id',ids);
+    if(error)throw error;
+    const opted=new Map((consents||[]).filter(c=>c.share_email).map(c=>[c.user_id,c]));
+    const items=await Promise.all(players.map(async p=>{
+      const consent=opted.get(p.userId);
+      let email=null;
+      if(consent){
+        try{const {data}=await supabase.auth.admin.getUserById(p.userId);email=data?.user?.email||null}catch(e){console.warn('Lecture e-mail consentie impossible:',e?.message)}
+      }
+      return {...p,email,emailShared:!!consent};
+    }));
+    res.json({items,total:items.length,generatedAt:new Date().toISOString()});
+  }catch(e){jsonError(res,e,'Impossible de charger les joueurs connectés.')}
+});
+
+app.post('/api/admin/messages',rateLimit({windowMs:60000,max:20}),async(req,res)=>{
+  try{
+    res.setHeader('Cache-Control','no-store');
+    const admin=await requireDeveloper(req,res);if(!admin)return;
+    const message=String(req.body?.message||'').replace(/[<>\\u0000-\\u001f]/g,' ').trim().slice(0,500);
+    const isBroadcast=req.body?.broadcast===true;
+    const targetUserId=String(req.body?.targetUserId||'').trim();
+    if(!message)return res.status(400).json({error:'Le message est vide.'});
+    if(!isBroadcast&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(targetUserId))
+      return res.status(400).json({error:'Choisis un joueur connecté ou une annonce globale.'});
+    let recipients=0;
+    for(const room of rooms.values()) for(const p of room.players.values()){
+      if(isBroadcast||(p.uid&&p.uid===targetUserId)){
+        send(p.ws,{t:'admin_message',message,createdAt:new Date().toISOString(),from:'DUST SIEGE'});
+        recipients++;
+      }
+    }
+    const {error}=await supabase.from('ds_admin_message_audit').insert({
+      created_by:admin.id,target_user_id:isBroadcast?null:targetUserId,is_broadcast:isBroadcast,message,recipient_count:recipients
+    });
+    if(error)throw error;
+    res.json({ok:true,recipientCount:recipients});
+  }catch(e){jsonError(res,e,'Impossible d’envoyer le message.')}
+});
+
 app.get('/api/admin/overview',async(req,res)=>{
   try{
     res.setHeader('Cache-Control','no-store');
@@ -405,8 +488,12 @@ function startArenaLoop(r){if(r.tick)return;r.tick=setInterval(()=>{if(!r.player
  for(const p of r.players.values()){if(!p.alive&&now>=p.respawnAt){const q=randSpawn();p.x=q.x;p.z=q.z;p.hp=100;p.alive=true;p.invulnerableUntil=now+3000;send(p.ws,{t:'resp',x:p.x,z:p.z})}}
  broadcast(r,state(r));},100)}
 function dropPlayer(r,p){r.players.delete(p.id);broadcast(r,{t:'peer-',id:p.id});if(r.host===p.id){r.host=r.players.keys().next().value||null;if(r.host)broadcast(r,{t:'host',id:r.host})}if(r.arena)saveArenaPlayer(p,r);if(!r.players.size){if(r.tick)clearInterval(r.tick);rooms.delete(r.name)}}
-wss.on('connection',ws=>{ws.on('message',raw=>{let m;try{m=JSON.parse(raw.toString())}catch{return}if(!m||typeof m.t!=='string')return;
- if(m.t==='join'){const name=String(m.room||'salon').replace(/[^a-zA-Z0-9_-]/g,'').slice(0,40)||'salon',arena=!!m.auth,key=(arena?'arena:':'coop:')+name;let r=rooms.get(key);if(!r){r=makeRoom(key,arena);rooms.set(key,r)}if(r.players.size>=12)return send(ws,{t:'full'});const id=randomUUID().slice(0,8),q=arena?randSpawn():{x:0,z:0},p={id,uid:safeId(m.uid),ws,name:safeName(m.name),x:q.x,z:q.z,ya:0,hp:100,alive:true,respawnAt:0,score:0,kills:0,shots:0,hits:0,lastInputAt:Date.now(),lastShotAt:0,weapon:0,saved:false,invulnerableUntil:Date.now()+3000};r.players.set(id,p);ws.room=r;ws.player=p;const host=r.host||id;send(ws,{t:'welcome',id,host,x:p.x,z:p.z,peers:[...r.players.values()].filter(x=>x.id!==id).map(x=>({id:x.id}))});if(!r.host)r.host=id;broadcast(r,{t:'peer+',id});if(arena){startArenaLoop(r);send(ws,state(r))}return}
+wss.on('connection',ws=>{ws.on('message',async raw=>{let m;try{m=JSON.parse(raw.toString())}catch{return}if(!m||typeof m.t!=='string')return;
+ if(m.t==='join'){
+  let authUser=null;
+  const accessToken=typeof m.token==='string'?m.token:'';
+  if(accessToken&&accessToken.length<5000){try{const {data,error}=await supabase.auth.getUser(accessToken);if(!error&&data?.user?.email_confirmed_at)authUser=data.user}catch(e){console.warn('WebSocket auth:',e?.message)}}
+  const name=String(m.room||'salon').replace(/[^a-zA-Z0-9_-]/g,'').slice(0,40)||'salon',arena=!!m.auth,key=(arena?'arena:':'coop:')+name;let r=rooms.get(key);if(!r){r=makeRoom(key,arena);rooms.set(key,r)}if(r.players.size>=12)return send(ws,{t:'full'});const id=randomUUID().slice(0,8),q=arena?randSpawn():{x:0,z:0},p={id,uid:authUser?safeId(authUser.id):'anon',email:authUser?.email||null,ws,name:safeName(m.name),x:q.x,z:q.z,ya:0,hp:100,alive:true,respawnAt:0,score:0,kills:0,shots:0,hits:0,lastInputAt:Date.now(),lastShotAt:0,weapon:0,saved:false,invulnerableUntil:Date.now()+3000};r.players.set(id,p);ws.room=r;ws.player=p;const host=r.host||id;send(ws,{t:'welcome',id,host,x:p.x,z:p.z,identity:!!authUser,peers:[...r.players.values()].filter(x=>x.id!==id).map(x=>({id:x.id}))});if(!r.host)r.host=id;broadcast(r,{t:'peer+',id});if(arena){startArenaLoop(r);send(ws,state(r))}return}
  const r=ws.room,p=ws.player;if(!r||!p)return;
  if(m.t==='p'&&!r.arena){p.x=num(m.x,-1000,1000);p.z=num(m.z,-1000,1000);p.ya=num(m.ya,-20,20);broadcast(r,{...m,t:'p',from:p.id})}
  else if(m.t==='en'&&!r.arena&&p.id===r.host)broadcast(r,m)
