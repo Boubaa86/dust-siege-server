@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: dust-siege-server-1
+    runtime: node
+    region: oregon
+    plan: free
+    branch: main
+    buildCommand: npm install
+    startCommand: node server.js
+    autoDeployTrigger: commit
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: warworld-game-db
+          property: connectionString
+      - key: DATABASE_SSL
+        value: "false"
+
+databases:
+  - name: warworld-game-db
+    databaseName: warworld_game_db
+    user: warworld_game_db_user
+    plan: free
+    region: oregon
+    postgresMajorVersion: "18"
