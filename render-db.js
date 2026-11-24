@@ -88,6 +88,28 @@ export async function getMatchHistory(userId, limit = 20) {
   return rows;
 }
 
+export async function getLeaderboard(period = 'week', limit = 20) {
+  const db = getPool();
+  if (!db || !ready) throw new Error('Render PostgreSQL indisponible.');
+  const validPeriod = ['week', 'month', 'all'].includes(period) ? period : 'week';
+  const since = validPeriod === 'all'
+    ? null
+    : new Date(Date.now() - (validPeriod === 'month' ? 30 : 7) * 24 * 60 * 60 * 1000).toISOString();
+  const { rows } = await db.query(
+    `SELECT user_id,
+            COALESCE(SUM(score), 0)::int AS total_score,
+            COALESCE(SUM(kills), 0)::int AS total_kills,
+            COUNT(*)::int AS matches
+     FROM ww_match_history
+     WHERE ($2::timestamptz IS NULL OR played_at >= $2)
+     GROUP BY user_id
+     ORDER BY total_score DESC, total_kills DESC, matches DESC
+     LIMIT $1`,
+    [Math.max(1, Math.min(50, Number(limit) || 20)), since]
+  );
+  return rows;
+}
+
 export async function getMatchMetrics() {
   const db = getPool();
   if (!db || !ready) throw new Error('Render PostgreSQL indisponible.');
