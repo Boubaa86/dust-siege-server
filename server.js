@@ -6,6 +6,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { supabase, authSupabase } from './supabase.js';
 import { registerSocialRoutes } from './social-routes.js';
 import agoraToken from 'agora-token';
+import { initRenderPostgres, renderPostgresReady, recordMatch, getMatchHistory, getMatchMetrics, getLeaderboard } from './render-db.js';
 const { RtcTokenBuilder, RtcRole } = agoraToken;
 
 const app=express(),server=createServer(app),wss=new WebSocketServer({server,path:'/',maxPayload:16*1024,perMessageDeflate:false});
@@ -235,6 +236,75 @@ app.post('/api/admin/messages',rateLimit({windowMs:60000,max:20}),async(req,res)
     if(error)throw error;
     res.json({ok:true,recipientCount:recipients});
   }catch(e){jsonError(res,e,'Impossible d’envoyer le message.')}
+});
+
+
+// Historique des parties sur Render PostgreSQL.
+// Seuls les résultats fournis par le client sont enregistrés ici : ils ne sont PAS des scores anti-triche certifiés.
+app.get('/api/leaderboard', rateLimit({windowMs:60000,max:30}), async (req,res) => {
+  try {
+    res.setHeader('Cache-Control','no-store');
+    if(!renderPostgresReady()) return res.status(503).json({error:'La base Render PostgreSQL n’est pas encore configurée.'});
+    const period = ['week','month','all'].includes(String(req.query.period)) ? String(req.query.period) : 'week';
+    const limit = Math.floor(num(req.query.limit ?? 20, 1, 50));
+    const results = await getLeaderboard(period, limit);
+    const ids = results.map(row => row.user_id);
+    let names = new Map();
+    if(ids.length) {
+      const {data,error} = await supabase.from(TABLE).select('player_id,name').in('player_id',ids);
+      if(error) throw error;
+      names = new Map((data||[]).map(p => [p.player_id,safeName(p.name)]));
+    }
+    res.json({
+      period,
+      trust:'client-reported',
+      items:results.map((row,index)=>({
+        rank:index+1,
+        name:names.get(row.user_id)||'Joueur',
+        score:Number(row.total_score||0),
+        kills:Number(row.total_kills||0),
+        matches:Number(row.matches||0)
+      }))
+    });
+  } catch(e) { jsonError(res,e,'Impossible de charger le classement en ligne.'); }
+});
+
+app.get('/api/matches/history', async (req,res) => {
+  try {
+    res.setHeader('Cache-Control','no-store');
+    const user = await authenticatedUser(req,res); if(!user) return;
+    if(!renderPostgresReady()) return res.status(503).json({error:'La base Render PostgreSQL n’est pas encore configurée.'});
+    const limit = Math.floor(num(req.query.limit ?? 20, 1, 50));
+    const items = await getMatchHistory(user.id, limit);
+    res.json({items, storage:'render-postgres'});
+  } catch(e) { jsonError(res,e,'Impossible de charger l’historique des parties.'); }
+});
+
+app.post('/api/matches', rateLimit({windowMs:60000,max:10}), async (req,res) => {
+  try {
+    res.setHeader('Cache-Control','no-store');
+    const user = await authenticatedUser(req,res); if(!user) return;
+    if(!renderPostgresReady()) return res.status(503).json({error:'La base Render PostgreSQL n’est pas encore configurée.'});
+    const mode = String(req.body?.mode || '').replace(/[^a-zA-Z0-9_-]/g,'').slice(0,24);
+    if(!mode) return res.status(400).json({error:'Mode de jeu invalide.'});
+    const result = await recordMatch(user.id, {
+      mode,
+      score: Math.floor(num(req.body?.score,0,10000000)),
+      wave: Math.floor(num(req.body?.wave,0,10000)),
+      kills: Math.floor(num(req.body?.kills,0,100000)),
+      durationSeconds: Math.floor(num(req.body?.durationSeconds,0,21600))
+    });
+    res.status(201).json({ok:true,match:result,trust:'client-reported'});
+  } catch(e) { jsonError(res,e,'Impossible d’enregistrer la partie.'); }
+});
+
+app.get('/api/admin/database/overview', async (req,res) => {
+  try {
+    res.setHeader('Cache-Control','no-store');
+    const user = await requireDeveloper(req,res); if(!user) return;
+    if(!renderPostgresReady()) return res.status(503).json({error:'La base Render PostgreSQL n’est pas encore configurée.'});
+    res.json(await getMatchMetrics());
+  } catch(e) { jsonError(res,e,'Impossible de charger les statistiques de la base.'); }
 });
 
 app.get('/api/admin/overview',async(req,res)=>{
@@ -505,5 +575,6 @@ wss.on('connection',ws=>{ws.on('message',async raw=>{let m;try{m=JSON.parse(raw.
  else if(m.t==='finish'&&r.arena)saveArenaPlayer(p,r);
  });ws.on('close',()=>{const r=ws.room,p=ws.player;if(r&&p)dropPlayer(r,p)});});
 const heartbeat=setInterval(()=>{for(const ws of wss.clients){if(ws.readyState!==WebSocket.OPEN)continue;if(ws.isAlive===false){ws.terminate();continue}ws.isAlive=false;ws.ping()}},30000);wss.on('connection',ws=>{ws.isAlive=true;ws.on('pong',()=>ws.isAlive=true)});
-app.get('/health',(_req,res)=>res.json({ok:true,websocket:true,arenaAuthority:true}));
+app.get('/health',(_req,res)=>res.json({ok:true,websocket:true,arenaAuthority:true,renderPostgres:renderPostgresReady()}));
 const PORT=process.env.PORT||3000;server.listen(PORT,()=>console.log(`Dust Siege API + WebSocket en écoute sur ${PORT}`));
+initRenderPostgres().catch(e=>console.error('Initialisation Render PostgreSQL impossible :',e?.message||e));
