@@ -6,7 +6,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { supabase, authSupabase } from './supabase.js';
 import { registerSocialRoutes } from './social-routes.js';
 import agoraToken from 'agora-token';
-import { initRenderPostgres, renderPostgresReady, recordMatch, getMatchHistory, getMatchMetrics } from './render-db.js';
+import { initRenderPostgres, renderPostgresReady, recordMatch, getMatchHistory, getMatchMetrics, getLeaderboard } from './render-db.js';
 const { RtcTokenBuilder, RtcRole } = agoraToken;
 
 const app=express(),server=createServer(app),wss=new WebSocketServer({server,path:'/',maxPayload:16*1024,perMessageDeflate:false});
@@ -241,6 +241,34 @@ app.post('/api/admin/messages',rateLimit({windowMs:60000,max:20}),async(req,res)
 
 // Historique des parties sur Render PostgreSQL.
 // Seuls les résultats fournis par le client sont enregistrés ici : ils ne sont PAS des scores anti-triche certifiés.
+app.get('/api/leaderboard', rateLimit({windowMs:60000,max:30}), async (req,res) => {
+  try {
+    res.setHeader('Cache-Control','no-store');
+    if(!renderPostgresReady()) return res.status(503).json({error:'La base Render PostgreSQL n’est pas encore configurée.'});
+    const period = ['week','month','all'].includes(String(req.query.period)) ? String(req.query.period) : 'week';
+    const limit = Math.floor(num(req.query.limit ?? 20, 1, 50));
+    const results = await getLeaderboard(period, limit);
+    const ids = results.map(row => row.user_id);
+    let names = new Map();
+    if(ids.length) {
+      const {data,error} = await supabase.from(TABLE).select('player_id,name').in('player_id',ids);
+      if(error) throw error;
+      names = new Map((data||[]).map(p => [p.player_id,safeName(p.name)]));
+    }
+    res.json({
+      period,
+      trust:'client-reported',
+      items:results.map((row,index)=>({
+        rank:index+1,
+        name:names.get(row.user_id)||'Joueur',
+        score:Number(row.total_score||0),
+        kills:Number(row.total_kills||0),
+        matches:Number(row.matches||0)
+      }))
+    });
+  } catch(e) { jsonError(res,e,'Impossible de charger le classement en ligne.'); }
+});
+
 app.get('/api/matches/history', async (req,res) => {
   try {
     res.setHeader('Cache-Control','no-store');
