@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#071525">
+<meta name="description" content="3D Game Asset Studio : crée et prépare des modèles 3D pour tes jeux vidéo.">
+<title>3D Game Asset Studio</title>
+<style>
+:root{color-scheme:dark;--bg:#071525;--panel:#0d2034;--line:#1b3b55;--cyan:#55e3e2;--blue:#5a8cff;--muted:#a8bdcf}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;background:radial-gradient(ellipse at 80% 0%,#12334a 0,transparent 38%),var(--bg);color:#eff8ff;line-height:1.6}
+a{color:inherit;text-decoration:none}.wrap{width:min(1100px,92%);margin:auto}
+header{position:sticky;top:0;z-index:5;background:#071525dd;backdrop-filter:blur(14px);border-bottom:1px solid #18364d}
+nav{height:72px;display:flex;align-items:center;justify-content:space-between;gap:20px}.brand{font-weight:850;letter-spacing:.3px}.brand span{color:var(--cyan)}.navlinks{display:flex;gap:24px;color:var(--muted);font-size:14px}
+.btn{display:inline-flex;align-items:center;justify-content:center;padding:12px 19px;border-radius:12px;background:linear-gradient(110deg,var(--cyan),#72a6ff);color:#041321;font-weight:800;box-shadow:0 8px 28px #55e3e233}
+.hero{padding:94px 0 75px;display:grid;grid-template-columns:1.1fr .9fr;align-items:center;gap:44px}.eyebrow{color:var(--cyan);font-size:12px;font-weight:800;letter-spacing:2px;text-transform:uppercase}
+h1{font-size:clamp(42px,6vw,70px);line-height:1.03;letter-spacing:-2px;margin:15px 0 22px}.grad{background:linear-gradient(90deg,#fff,var(--cyan),#82aaff);-webkit-background-clip:text;background-clip:text;color:transparent}
+.lead{font-size:18px;color:var(--muted);max-width:600px}.actions{display:flex;gap:13px;flex-wrap:wrap;margin-top:30px}.secondary{border:1px solid #31536c;border-radius:12px;padding:12px 18px;color:#d5e8f7;font-weight:700}
+.scene{min-height:360px;border:1px solid #28506a;border-radius:28px;background:linear-gradient(145deg,#15344b,#091827 65%);display:grid;place-items:center;position:relative;overflow:hidden;box-shadow:0 25px 80px #0008}
+.scene:before,.scene:after{content:"";position:absolute;border:1px solid #55e3e244;border-radius:50%;width:290px;height:290px}.scene:after{width:390px;height:390px}
+.cube{font-size:112px;filter:drop-shadow(0 20px 35px #55e3e255);z-index:1}.scene small{position:absolute;bottom:22px;color:#9db9cc;letter-spacing:2px}
+section{padding:65px 0}.section-title{text-align:center;font-size:clamp(28px,4vw,40px);margin:0 0 12px}.section-sub{text-align:center;color:var(--muted);max-width:650px;margin:0 auto 34px}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:15px}.card{background:linear-gradient(160deg,#102941,#0a1b2b);border:1px solid var(--line);padding:23px;border-radius:18px}.ico{font-size:28px}.card h3{margin:12px 0 6px}.card p{color:var(--muted);font-size:14px;margin:0}
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.step{padding:22px;border-left:2px solid var(--cyan);background:#0b1e30;border-radius:0 15px 15px 0}.num{color:var(--cyan);font-weight:900;font-size:13px}
+.banner{border:1px solid #286078;background:linear-gradient(110deg,#102f43,#142b48);border-radius:24px;padding:38px;display:flex;align-items:center;justify-content:space-between;gap:25px}.banner p{color:var(--muted);margin-bottom:0}
+.faq{max-width:780px;margin:auto}.faq details{padding:17px 0;border-bottom:1px solid var(--line)}.faq summary{font-weight:750;cursor:pointer}.faq p{color:var(--muted);margin-bottom:0}
+footer{border-top:1px solid var(--line);padding:28px 0;color:var(--muted);font-size:13px}.foot{display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap}
+@media(max-width:800px){.hero{grid-template-columns:1fr;padding-top:65px}.scene{min-height:260px}.grid{grid-template-columns:repeat(2,1fr)}.steps{grid-template-columns:1fr}.navlinks{display:none}.banner{align-items:flex-start;flex-direction:column}}
+@media(max-width:440px){.grid{grid-template-columns:1fr}.hero{gap:25px}h1{letter-spacing:-1px}}
+</style>
+</head>
+<body>
+<header><div class="wrap"><nav><a class="brand" href="#">◈ 3D <span>GAME ASSET</span> STUDIO</a><div class="navlinks"><a href="#outils">Outils</a><a href="#workflow">Étapes</a><a href="#faq">FAQ</a></div><a class="btn" href="https://chatgpt.com/plugins/plugins_6b0875b729b8819199eff74b67d3e95d">Ouvrir le plugin ↗</a></nav></div></header>
+<main>
+<div class="wrap hero"><div><div class="eyebrow">Atelier de création 3D</div><h1>Donne vie à tes idées en <span class="grad">3D.</span></h1><p class="lead">Crée des personnages, armes, véhicules et décors pour tes jeux vidéo. Prépare tes assets pour Unity et les jeux Web, avec une attention particulière aux performances mobiles.</p><div class="actions"><a class="btn" href="https://chatgpt.com/plugins/plugins_6b0875b729b8819199eff74b67d3e95d">Lancer 3D Game Asset Studio ↗</a><a class="secondary" href="#workflow">Voir comment ça marche</a></div></div><div class="scene"><div class="cube">🧊</div><small>CONCEPT · MODEL · GAME READY</small></div></div>
+<section id="outils"><div class="wrap"><h2 class="section-title">Un studio, plusieurs possibilités</h2><p class="section-sub">Prépare les éléments qui donnent du caractère à ton univers de jeu.</p><div class="grid">
+<article class="card"><div class="ico">🪖</div><h3>Personnages</h3><p>Soldats, héros, ennemis et personnages secondaires.</p></article>
+<article class="card"><div class="ico">🔫</div><h3>Armes & équipement</h3><p>Armes, accessoires, armures et objets tactiques.</p></article>
+<article class="card"><div class="ico">🚙</div><h3>Véhicules</h3><p>Voitures, véhicules militaires et machines.</p></article>
+<article class="card"><div class="ico">🏙️</div><h3>Environnements</h3><p>Bâtiments, arbres, rochers et éléments de décor.</p></article>
+</div></div></section>
+<section id="workflow"><div class="wrap"><h2 class="section-title">De l'idée au jeu</h2><p class="section-sub">Un processus simple, avec une vérification avant l'intégration.</p><div class="steps">
+<div class="step"><div class="num">ÉTAPE 01</div><h3>Décris ton idée</h3><p>Précise le style, les détails, l'échelle et l'utilisation prévue.</p></div>
+<div class="step"><div class="num">ÉTAPE 02</div><h3>Génère le modèle</h3><p>Utilise le workflow de création 3D adapté, puis vérifie le résultat.</p></div>
+<div class="step"><div class="num">ÉTAPE 03</div><h3>Prépare l'export</h3><p>Contrôle les textures, le poids, la géométrie et la compatibilité avec ton moteur.</p></div>
+</div></div></section>
+<section><div class="wrap"><div class="banner"><div><div class="eyebrow">Conçu pour les créateurs</div><h2 style="margin:7px 0">Prêt pour ton prochain projet ?</h2><p>Commence à créer les assets de ton univers, notamment pour Warworld.</p></div><a class="btn" href="https://chatgpt.com/plugins/plugins_6b0875b729b8819199eff74b67d3e95d">Accéder au plugin ↗</a></div></div></section>
+<section id="faq"><div class="wrap"><h2 class="section-title">Questions fréquentes</h2><div class="faq">
+<details><summary>Le site génère-t-il lui-même les modèles 3D ?</summary><p>Le site présente le studio. La génération se fait depuis le plugin et les outils connectés compatibles.</p></details>
+<details><summary>Les modèles sont-ils prêts à animer ?</summary><p>Pas automatiquement. Le rigging, les animations et les tests dans le moteur doivent être vérifiés séparément.</p></details>
+<details><summary>Quels formats utiliser ?</summary><p>GLB est souvent pratique pour le Web ; FBX est courant dans les workflows Unity. Vérifie toujours les options d'export disponibles.</p></details>
+<details><summary>Le site modifie-t-il le jeu Warworld ?</summary><p>Non. Il est indépendant du serveur du jeu et ne modifie pas les fichiers de Warworld.</p></details>
+</div></div></section>
+</main>
+<footer><div class="wrap foot"><span>© 2026 3D Game Asset Studio</span><span>Création 3D pour jeux vidéo · Site indépendant</span></div></footer>
+</body></html>
