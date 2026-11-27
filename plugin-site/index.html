@@ -3,53 +3,116 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#071525">
-<meta name="description" content="3D Game Asset Studio : crée et prépare des modèles 3D pour tes jeux vidéo.">
+<meta name="description" content="Crée des modèles 3D pour tes jeux avec Meshy, prévisualise-les et exporte-les.">
 <title>3D Game Asset Studio</title>
+<script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/4.0.0/model-viewer.min.js"></script>
 <style>
-:root{color-scheme:dark;--bg:#071525;--panel:#0d2034;--line:#1b3b55;--cyan:#55e3e2;--blue:#5a8cff;--muted:#a8bdcf}
+:root{color-scheme:dark;--bg:#071525;--panel:#0d2034;--line:#1b3b55;--cyan:#55e3e2;--blue:#5a8cff;--muted:#a8bdcf;--good:#76e0ad;--bad:#ff9b9b}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;background:radial-gradient(ellipse at 80% 0%,#12334a 0,transparent 38%),var(--bg);color:#eff8ff;line-height:1.6}
-a{color:inherit;text-decoration:none}.wrap{width:min(1100px,92%);margin:auto}
-header{position:sticky;top:0;z-index:5;background:#071525dd;backdrop-filter:blur(14px);border-bottom:1px solid #18364d}
-nav{height:72px;display:flex;align-items:center;justify-content:space-between;gap:20px}.brand{font-weight:850;letter-spacing:.3px}.brand span{color:var(--cyan)}.navlinks{display:flex;gap:24px;color:var(--muted);font-size:14px}
-.btn{display:inline-flex;align-items:center;justify-content:center;padding:12px 19px;border-radius:12px;background:linear-gradient(110deg,var(--cyan),#72a6ff);color:#041321;font-weight:800;box-shadow:0 8px 28px #55e3e233}
-.hero{padding:94px 0 75px;display:grid;grid-template-columns:1.1fr .9fr;align-items:center;gap:44px}.eyebrow{color:var(--cyan);font-size:12px;font-weight:800;letter-spacing:2px;text-transform:uppercase}
-h1{font-size:clamp(42px,6vw,70px);line-height:1.03;letter-spacing:-2px;margin:15px 0 22px}.grad{background:linear-gradient(90deg,#fff,var(--cyan),#82aaff);-webkit-background-clip:text;background-clip:text;color:transparent}
-.lead{font-size:18px;color:var(--muted);max-width:600px}.actions{display:flex;gap:13px;flex-wrap:wrap;margin-top:30px}.secondary{border:1px solid #31536c;border-radius:12px;padding:12px 18px;color:#d5e8f7;font-weight:700}
-.scene{min-height:360px;border:1px solid #28506a;border-radius:28px;background:linear-gradient(145deg,#15344b,#091827 65%);display:grid;place-items:center;position:relative;overflow:hidden;box-shadow:0 25px 80px #0008}
-.scene:before,.scene:after{content:"";position:absolute;border:1px solid #55e3e244;border-radius:50%;width:290px;height:290px}.scene:after{width:390px;height:390px}
-.cube{font-size:112px;filter:drop-shadow(0 20px 35px #55e3e255);z-index:1}.scene small{position:absolute;bottom:22px;color:#9db9cc;letter-spacing:2px}
-section{padding:65px 0}.section-title{text-align:center;font-size:clamp(28px,4vw,40px);margin:0 0 12px}.section-sub{text-align:center;color:var(--muted);max-width:650px;margin:0 auto 34px}
-.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:15px}.card{background:linear-gradient(160deg,#102941,#0a1b2b);border:1px solid var(--line);padding:23px;border-radius:18px}.ico{font-size:28px}.card h3{margin:12px 0 6px}.card p{color:var(--muted);font-size:14px;margin:0}
-.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.step{padding:22px;border-left:2px solid var(--cyan);background:#0b1e30;border-radius:0 15px 15px 0}.num{color:var(--cyan);font-weight:900;font-size:13px}
-.banner{border:1px solid #286078;background:linear-gradient(110deg,#102f43,#142b48);border-radius:24px;padding:38px;display:flex;align-items:center;justify-content:space-between;gap:25px}.banner p{color:var(--muted);margin-bottom:0}
-.faq{max-width:780px;margin:auto}.faq details{padding:17px 0;border-bottom:1px solid var(--line)}.faq summary{font-weight:750;cursor:pointer}.faq p{color:var(--muted);margin-bottom:0}
-footer{border-top:1px solid var(--line);padding:28px 0;color:var(--muted);font-size:13px}.foot{display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap}
-@media(max-width:800px){.hero{grid-template-columns:1fr;padding-top:65px}.scene{min-height:260px}.grid{grid-template-columns:repeat(2,1fr)}.steps{grid-template-columns:1fr}.navlinks{display:none}.banner{align-items:flex-start;flex-direction:column}}
-@media(max-width:440px){.grid{grid-template-columns:1fr}.hero{gap:25px}h1{letter-spacing:-1px}}
+a{color:inherit;text-decoration:none}.wrap{width:min(1100px,92%);margin:auto}header{position:sticky;top:0;z-index:5;background:#071525ed;backdrop-filter:blur(14px);border-bottom:1px solid #18364d}
+nav{height:68px;display:flex;align-items:center;justify-content:space-between;gap:20px}.brand{font-weight:850;letter-spacing:.3px}.brand span{color:var(--cyan)}.navlinks{display:flex;gap:22px;color:var(--muted);font-size:14px}
+.btn{display:inline-flex;align-items:center;justify-content:center;padding:12px 19px;border:0;border-radius:12px;background:linear-gradient(110deg,var(--cyan),#72a6ff);color:#041321;font-weight:850;cursor:pointer}.btn:disabled{opacity:.5;cursor:not-allowed}.secondary{border:1px solid #31536c;border-radius:12px;padding:11px 17px;color:#d5e8f7;font-weight:700;background:transparent;cursor:pointer}
+.hero{padding:65px 0 42px;display:grid;grid-template-columns:1.1fr .9fr;align-items:center;gap:38px}.eyebrow{color:var(--cyan);font-size:12px;font-weight:800;letter-spacing:2px;text-transform:uppercase}h1{font-size:clamp(40px,6vw,66px);line-height:1.04;letter-spacing:-2px;margin:14px 0 18px}.grad{background:linear-gradient(90deg,#fff,var(--cyan),#82aaff);-webkit-background-clip:text;background-clip:text;color:transparent}.lead{font-size:17px;color:var(--muted);max-width:600px}.hero-art{min-height:250px;border:1px solid #28506a;border-radius:26px;background:linear-gradient(145deg,#15344b,#091827 65%);display:grid;place-items:center;font-size:100px;box-shadow:0 25px 80px #0006}
+section{padding:42px 0}.section-title{text-align:center;font-size:clamp(27px,4vw,38px);margin:0 0 8px}.section-sub{text-align:center;color:var(--muted);max-width:680px;margin:0 auto 28px}
+.studio{display:grid;grid-template-columns:.9fr 1.1fr;gap:18px;align-items:stretch}.panel{background:linear-gradient(160deg,#102941,#0a1b2b);border:1px solid var(--line);padding:22px;border-radius:20px}.panel h3{margin:0 0 7px}.muted{color:var(--muted)}label{display:block;font-weight:700;font-size:14px;margin:16px 0 7px}textarea,select{width:100%;border:1px solid #31536c;background:#071a2b;color:#eff8ff;border-radius:12px;padding:13px;font:inherit}textarea{min-height:125px;resize:vertical}select{min-height:46px}.hint{font-size:12px;color:var(--muted);margin-top:6px}.rowbtn{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}.cost{display:flex;gap:10px;flex-wrap:wrap;margin-top:13px}.pill{font-size:12px;color:#c5dbea;border:1px solid #31536c;border-radius:30px;padding:5px 10px}
+.status{margin-top:15px;padding:12px;border-radius:12px;background:#071a2b;border:1px solid #24445b;color:#c5dbea;font-size:13px;min-height:46px}.status.good{border-color:#337b61;color:var(--good)}.status.error{border-color:#874b4b;color:var(--bad)}
+.viewer{background:#061421;border:1px solid #24445b;border-radius:16px;min-height:350px;overflow:hidden;display:grid;place-items:center;position:relative}.viewer model-viewer{width:100%;height:390px;background:radial-gradient(ellipse,#16374b,#061421 75%)}.empty{text-align:center;padding:28px;color:var(--muted)}.empty b{display:block;color:#eaf7ff;font-size:18px;margin-bottom:8px}.download{display:none;gap:10px;flex-wrap:wrap;margin-top:12px}.download a{border:1px solid #31536c;border-radius:10px;padding:8px 13px;font-size:13px}
+.features{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.feature{background:#0d2034;border:1px solid var(--line);padding:19px;border-radius:16px}.feature .ico{font-size:26px}.feature p{font-size:13px;color:var(--muted);margin:5px 0 0}
+.note{border:1px solid #5b5129;background:#2b2616;color:#f2dfa0;padding:13px 15px;border-radius:12px;font-size:13px;margin-top:16px}
+footer{border-top:1px solid var(--line);padding:25px 0;color:var(--muted);font-size:13px}.foot{display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap}
+@media(max-width:800px){.hero{grid-template-columns:1fr;padding-top:45px}.hero-art{min-height:170px}.studio{grid-template-columns:1fr}.features{grid-template-columns:repeat(2,1fr)}.navlinks{display:none}.viewer model-viewer{height:310px}}
+@media(max-width:440px){.features{grid-template-columns:1fr}.panel{padding:17px}h1{letter-spacing:-1px}}
 </style>
 </head>
 <body>
-<header><div class="wrap"><nav><a class="brand" href="#">◈ 3D <span>GAME ASSET</span> STUDIO</a><div class="navlinks"><a href="#outils">Outils</a><a href="#workflow">Étapes</a><a href="#faq">FAQ</a></div><a class="btn" href="https://chatgpt.com/plugins/plugins_6b0875b729b8819199eff74b67d3e95d">Ouvrir le plugin ↗</a></nav></div></header>
+<header><div class="wrap"><nav><a class="brand" href="#">◈ 3D <span>GAME ASSET</span> STUDIO</a><div class="navlinks"><a href="#create">Créer</a><a href="#outils">Possibilités</a></div><a class="secondary" href="https://chatgpt.com/plugins/plugins_6b0875b729b8819199eff74b67d3e95d">Plugin ↗</a></nav></div></header>
 <main>
-<div class="wrap hero"><div><div class="eyebrow">Atelier de création 3D</div><h1>Donne vie à tes idées en <span class="grad">3D.</span></h1><p class="lead">Crée des personnages, armes, véhicules et décors pour tes jeux vidéo. Prépare tes assets pour Unity et les jeux Web, avec une attention particulière aux performances mobiles.</p><div class="actions"><a class="btn" href="https://chatgpt.com/plugins/plugins_6b0875b729b8819199eff74b67d3e95d">Lancer 3D Game Asset Studio ↗</a><a class="secondary" href="#workflow">Voir comment ça marche</a></div></div><div class="scene"><div class="cube">🧊</div><small>CONCEPT · MODEL · GAME READY</small></div></div>
-<section id="outils"><div class="wrap"><h2 class="section-title">Un studio, plusieurs possibilités</h2><p class="section-sub">Prépare les éléments qui donnent du caractère à ton univers de jeu.</p><div class="grid">
-<article class="card"><div class="ico">🪖</div><h3>Personnages</h3><p>Soldats, héros, ennemis et personnages secondaires.</p></article>
-<article class="card"><div class="ico">🔫</div><h3>Armes & équipement</h3><p>Armes, accessoires, armures et objets tactiques.</p></article>
-<article class="card"><div class="ico">🚙</div><h3>Véhicules</h3><p>Voitures, véhicules militaires et machines.</p></article>
-<article class="card"><div class="ico">🏙️</div><h3>Environnements</h3><p>Bâtiments, arbres, rochers et éléments de décor.</p></article>
-</div></div></section>
-<section id="workflow"><div class="wrap"><h2 class="section-title">De l'idée au jeu</h2><p class="section-sub">Un processus simple, avec une vérification avant l'intégration.</p><div class="steps">
-<div class="step"><div class="num">ÉTAPE 01</div><h3>Décris ton idée</h3><p>Précise le style, les détails, l'échelle et l'utilisation prévue.</p></div>
-<div class="step"><div class="num">ÉTAPE 02</div><h3>Génère le modèle</h3><p>Utilise le workflow de création 3D adapté, puis vérifie le résultat.</p></div>
-<div class="step"><div class="num">ÉTAPE 03</div><h3>Prépare l'export</h3><p>Contrôle les textures, le poids, la géométrie et la compatibilité avec ton moteur.</p></div>
-</div></div></section>
-<section><div class="wrap"><div class="banner"><div><div class="eyebrow">Conçu pour les créateurs</div><h2 style="margin:7px 0">Prêt pour ton prochain projet ?</h2><p>Commence à créer les assets de ton univers, notamment pour Warworld.</p></div><a class="btn" href="https://chatgpt.com/plugins/plugins_6b0875b729b8819199eff74b67d3e95d">Accéder au plugin ↗</a></div></div></section>
-<section id="faq"><div class="wrap"><h2 class="section-title">Questions fréquentes</h2><div class="faq">
-<details><summary>Le site génère-t-il lui-même les modèles 3D ?</summary><p>Le site présente le studio. La génération se fait depuis le plugin et les outils connectés compatibles.</p></details>
-<details><summary>Les modèles sont-ils prêts à animer ?</summary><p>Pas automatiquement. Le rigging, les animations et les tests dans le moteur doivent être vérifiés séparément.</p></details>
-<details><summary>Quels formats utiliser ?</summary><p>GLB est souvent pratique pour le Web ; FBX est courant dans les workflows Unity. Vérifie toujours les options d'export disponibles.</p></details>
-<details><summary>Le site modifie-t-il le jeu Warworld ?</summary><p>Non. Il est indépendant du serveur du jeu et ne modifie pas les fichiers de Warworld.</p></details>
+<div class="wrap hero"><div><div class="eyebrow">Atelier de création 3D</div><h1>Imagine. Génère. <span class="grad">Joue.</span></h1><p class="lead">Décris ton personnage, ton arme ou ton décor : Meshy fabrique un modèle 3D que tu peux examiner puis exporter pour ton jeu.</p><a class="btn" href="#create">Ouvrir le générateur ↓</a></div><div class="hero-art">🧊</div></div>
+<section id="create"><div class="wrap"><h2 class="section-title">Générateur 3D IA</h2><p class="section-sub">Commence par une prévisualisation optimisée pour les jeux. Tu peux ensuite demander les textures.</p>
+<div class="studio">
+<div class="panel"><h3>1. Décris ton modèle</h3><p class="muted" style="font-size:13px;margin-top:0">Sois précis : matériaux, couleurs, forme, style et détails utiles.</p>
+<label for="prompt">Description de l'objet</label><textarea id="prompt" maxlength="600" placeholder="Exemple : un soldat futuriste en armure tactique noire et sable, casque fermé, sac à dos, proportions réalistes, pose A, modèle 3D de jeu vidéo..."></textarea><div class="hint"><span id="count">0</span>/600 caractères</div>
+<label for="kind">Type de création</label><select id="kind"><option value="character">Personnage / soldat</option><option value="weapon">Arme / équipement</option><option value="vehicle">Véhicule</option><option value="building">Bâtiment / décor</option><option value="prop">Objet / accessoire</option></select>
+<div class="cost"><span class="pill">Prévisualisation : 5 crédits</span><span class="pill">Textures : environ 10 crédits</span><span class="pill">Export : GLB / FBX</span></div>
+<div class="rowbtn"><button class="btn" id="generate">Générer le modèle</button><button class="secondary" id="example">Exemple</button></div>
+<div id="status" class="status">Vérification de la connexion au générateur…</div>
+<div class="note">Chaque génération consomme des crédits Meshy. Vérifie le coût affiché avant de confirmer. Ne partage jamais ta clé API dans cette page.</div>
+</div>
+<div class="panel"><h3>2. Prévisualise ton modèle</h3><p class="muted" style="font-size:13px;margin-top:0">Fais glisser pour tourner le modèle et pince pour zoomer sur téléphone.</p>
+<div class="viewer" id="viewer"><div class="empty"><b>Ton modèle apparaîtra ici</b>La prévisualisation 3D s'affichera après la génération.</div></div>
+<div class="rowbtn"><button class="btn" id="texture" disabled>Ajouter les textures</button></div>
+<div class="download" id="downloads"><a id="glb" href="#" target="_blank" rel="noopener">Télécharger GLB</a><a id="fbx" href="#" target="_blank" rel="noopener">Télécharger FBX</a></div>
+<div class="hint">Les liens de téléchargement Meshy sont temporaires : télécharge ton modèle dès qu'il est prêt.</div>
+</div></div></div></section>
+<section id="outils"><div class="wrap"><h2 class="section-title">Que peux-tu créer ?</h2><p class="section-sub">Des éléments pour tes jeux Web et Unity, avec une attention aux performances mobiles.</p><div class="features">
+<div class="feature"><div class="ico">🪖</div><b>Personnages</b><p>Soldats, héros, robots et ennemis.</p></div><div class="feature"><div class="ico">🛡️</div><b>Armes & équipements</b><p>Armes fictives, armures et accessoires.</p></div><div class="feature"><div class="ico">🚙</div><b>Véhicules</b><p>Voitures, blindés et machines.</p></div><div class="feature"><div class="ico">🏙️</div><b>Environnements</b><p>Bâtiments, arbres, rochers et décors.</p></div>
 </div></div></section>
 </main>
-<footer><div class="wrap foot"><span>© 2026 3D Game Asset Studio</span><span>Création 3D pour jeux vidéo · Site indépendant</span></div></footer>
+<footer><div class="wrap foot"><span>© 2026 3D Game Asset Studio</span><span>Site indépendant · Warworld n'est pas modifié par ce studio</span></div></footer>
+<script>
+const API = "https://threed-game-asset-studio-api.onrender.com";
+const $ = id => document.getElementById(id);
+let previewId = null, currentTaskId = null, pollTimer = null, busy = false;
+function setStatus(message, type=""){ $("status").textContent=message; $("status").className="status "+type; }
+async function api(path, options={}) {
+  const response = await fetch(API+path, { ...options, headers:{"Content-Type":"application/json",...(options.headers||{})} });
+  const data = await response.json().catch(()=>({}));
+  if(!response.ok) throw new Error(data.error || "Erreur de connexion");
+  return data;
+}
+async function checkApi(){
+  try{const r=await api("/health");setStatus(r.meshyConfigured?"Générateur connecté. Tu peux créer ton premier modèle.":"Le serveur est prêt, mais la clé API Meshy doit encore être ajoutée dans Render.",r.meshyConfigured?"good":"");}
+  catch{setStatus("Le serveur de génération démarre ou n'est pas encore disponible. Réessaie dans un instant.");}
+}
+$("prompt").addEventListener("input",()=>{$("count").textContent=$("prompt").value.length;});
+$("example").addEventListener("click",()=>{$("kind").value="character";$("prompt").value="A realistic modern military game character, full body, wearing dark olive tactical armor, helmet with visor, utility vest, backpack, gloves and boots, neutral A-pose, detailed but optimized low-poly topology, clean separated parts";$("count").textContent=$("prompt").value.length;});
+function categoryPrompt(){
+ const kind=$("kind").value;
+ const prefix={character:"Game-ready full-body character, A-pose. ",weapon:"Game-ready fictional weapon prop. ",vehicle:"Game-ready vehicle asset. ",building:"Game-ready environment building asset. ",prop:"Game-ready 3D prop. "}[kind];
+ return prefix+$("prompt").value.trim();
+}
+function lock(v){busy=v;$("generate").disabled=v;$("texture").disabled=v||!previewId;}
+async function poll(id,stage){
+ clearTimeout(pollTimer);
+ try{
+  const task=await api("/api/tasks/"+encodeURIComponent(id));
+  const pct=Number(task.progress||0);
+  setStatus((stage==="refine"?"Texturation":"Génération")+" : "+(task.status||"en cours")+" · "+pct+"%", "");
+  if(["PENDING","IN_PROGRESS"].includes(task.status)){
+   pollTimer=setTimeout(()=>poll(id,stage),6000);return;
+  }
+  if(task.status!=="SUCCEEDED"){
+   setStatus("La tâche a échoué : "+(task.task_error?.message||task.status||"erreur inconnue"),"error");lock(false);return;
+  }
+  const glb=task.model_urls?.glb, fbx=task.model_urls?.fbx;
+  if(glb){
+   $("viewer").innerHTML='<model-viewer id="model" camera-controls auto-rotate shadow-intensity="1" exposure="1" environment-image="neutral" alt="Modèle 3D généré"></model-viewer>';
+   $("model").src=glb;
+   $("downloads").style.display="flex";
+   $("glb").href=glb;
+   if(fbx){$("fbx").href=fbx;$("fbx").style.display="inline-flex";}else{$("fbx").style.display="none";}
+  }
+  if(stage==="preview"){previewId=id;setStatus("Prévisualisation prête ! Fais tourner le modèle, puis ajoute les textures si tu le souhaites.","good");}
+  else{previewId=id;setStatus("Modèle texturé prêt ! Télécharge ton GLB ou FBX.","good");}
+  lock(false);
+ }catch(e){setStatus("Impossible de vérifier la tâche : "+e.message,"error");lock(false);}
+}
+$("generate").addEventListener("click",async()=>{
+ const prompt=categoryPrompt();
+ if(prompt.length<8){setStatus("Écris une description un peu plus précise.","error");return;}
+ if(!confirm("Lancer une prévisualisation Meshy ? Cette opération coûte environ 5 crédits."))return;
+ lock(true);previewId=null;$("downloads").style.display="none";$("viewer").innerHTML='<div class="empty"><b>Création en cours…</b>Meshy prépare la géométrie 3D. Cela peut prendre quelques minutes.</div>';
+ setStatus("Envoi de la demande à Meshy…");
+ try{const r=await api("/api/generate",{method:"POST",body:JSON.stringify({prompt})});currentTaskId=r.taskId;setStatus("Tâche créée. Génération en cours…");poll(r.taskId,"preview");}
+ catch(e){setStatus(e.message,"error");lock(false);}
+});
+$("texture").addEventListener("click",async()=>{
+ if(!previewId)return;
+ if(!confirm("Ajouter les textures au modèle ? Cette opération coûte environ 10 crédits."))return;
+ lock(true);setStatus("Envoi de la demande de texturation…");
+ try{const r=await api("/api/refine",{method:"POST",body:JSON.stringify({previewTaskId:previewId})});currentTaskId=r.taskId;setStatus("Texturation en cours…");poll(r.taskId,"refine");}
+ catch(e){setStatus(e.message,"error");lock(false);}
+});
+checkApi();
+</script>
 </body></html>
